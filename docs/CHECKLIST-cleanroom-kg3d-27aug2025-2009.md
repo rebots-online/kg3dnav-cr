@@ -96,8 +96,8 @@ Components
 - [ ] src/components/Sidebar.tsx — entity list, quick stats, sort/filter controls
 - [ ] src/components/DataSourcePanel.tsx — radio source selector, options, status indicators, refresh
 - [ ] src/components/AINavigationChat.tsx — keyword matching, highlight/navigation, layout suggestions
-- [ ] src/components/AboutModal.tsx — displays BuildInfo, product metadata
-- [ ] src/components/SplashScreen.tsx — shows product name + epoch build number
+- [X] src/components/AboutModal.tsx — displays BuildInfo, product metadata
+- [X] src/components/SplashScreen.tsx — shows product name + epoch build number
 - [ ] src/components/KnowledgeNode.tsx — node visuals by type, indicators for vector/audit/uuid matches
 
 Entry and routing
