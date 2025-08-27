@@ -86,23 +86,23 @@ MCP-backed loaders
 
 Build info and stamping
 - [X] Implement src/config/buildInfo.ts exporting getBuildInfo(): BuildInfo
-- [ ] Define Vite build-time constants: __BUILD_EPOCH__, __BUILD_SEMVER__, __GIT_SHA__
-- [ ] Tauri src-tauri/build.rs: inject BUILD_EPOCH and GIT_SHA into env; expose via command
+- [X] Define Vite build-time constants: __BUILD_EPOCH__, __BUILD_SEMVER__, __GIT_SHA__
+- [X] Tauri src-tauri/build.rs: inject BUILD_EPOCH and GIT_SHA into env; expose via command
 
 Components
-- [ ] src/components/AppShell.tsx — renders Canvas3D, Sidebar, DataSourcePanel, AINavigationChat, AboutModal, SplashScreen
-- [ ] src/components/Canvas3D.tsx — R3F Canvas with TrackballControls; onPointerMissed clears target
-- [ ] src/components/Scene3D.tsx — lights, relationship lines, KnowledgeNode instances, camera/controls animations
-- [ ] src/components/Sidebar.tsx — entity list, quick stats, sort/filter controls
-- [ ] src/components/DataSourcePanel.tsx — radio source selector, options, status indicators, refresh
-- [ ] src/components/AINavigationChat.tsx — keyword matching, highlight/navigation, layout suggestions
+- [X] src/components/AppShell.tsx — renders Canvas3D, Sidebar, DataSourcePanel, AINavigationChat, AboutModal, SplashScreen
+- [X] src/components/Canvas3D.tsx — R3F Canvas with TrackballControls; onPointerMissed clears target
+- [X] src/components/Scene3D.tsx — lights, relationship lines, KnowledgeNode instances, camera/controls animations
+- [X] src/components/Sidebar.tsx — entity list, quick stats, sort/filter controls
+- [X] src/components/DataSourcePanel.tsx — radio source selector, options, status indicators, refresh
+- [X] src/components/AINavigationChat.tsx — keyword matching, highlight/navigation, layout suggestions
 - [X] src/components/AboutModal.tsx — displays BuildInfo, product metadata
 - [X] src/components/SplashScreen.tsx — shows product name + epoch build number
-- [ ] src/components/KnowledgeNode.tsx — node visuals by type, indicators for vector/audit/uuid matches
+- [X] src/components/KnowledgeNode.tsx — node visuals by type, indicators for vector/audit/uuid matches
 
 Entry and routing
-- [ ] src/main.tsx — ReactDOM.createRoot, ErrorBoundary, mount AppShell
-- [ ] index.html — PWA-ready meta, root div, Vite module script
+- [X] src/main.tsx — ReactDOM.createRoot, ErrorBoundary, mount AppShell
+- [X] index.html — PWA-ready meta, root div, Vite module script
 
 Tauri runtime
 - [X] src-tauri/src/main.rs — setup, menu with About, command get_build_info, event emits (set-layout, toggle-xray, reset-camera, toggle-sidebar)
@@ -119,9 +119,9 @@ Quality gates
 - [X] Prettier config
 
 Release naming (epoch)
-- [ ] Artifact naming scheme: kg3d-navigator_${epoch}_${os}_${arch}.${ext}
-- [ ] About modal shows: v{semver} • build {epoch} • {gitSha}
-- [ ] Splash shows build {epoch}
+- [X] Artifact naming scheme: kg3d-navigator_${epoch}_${os}_${arch}.${ext}
+- [X] About modal shows: v{semver} • build {epoch} • {gitSha}
+- [X] Splash shows build {epoch}
 
 HKG sync discipline
 - [ ] After each file added, update hKG with entity and relation(s) (use UUID table)

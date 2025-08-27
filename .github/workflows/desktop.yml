@@ -52,7 +52,10 @@ jobs:
             ext=${base##*.}
             osname=${{ matrix.os }}
             osname=${osname/-latest/}
-            cp "$f" "artifacts/kg3d-navigator_${{ steps.epoch.outputs.epoch }}_${osname}.${ext}"
+            arch="unknown"
+            [[ "$base" == *"arm64"* || "$base" == *"aarch64"* ]] && arch="arm64"
+            [[ "$base" == *"x86_64"* || "$base" == *"amd64"* ]] && arch="amd64"
+            cp "$f" "artifacts/kg3d-navigator_${{ steps.epoch.outputs.epoch }}_${osname}_${arch}.${ext}"
           done
 
       - name: Upload artifacts

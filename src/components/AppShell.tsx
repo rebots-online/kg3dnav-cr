@@ -4,18 +4,29 @@ import Canvas3D from './Canvas3D'
 import Sidebar from './Sidebar'
 import DataSourcePanel from './DataSourcePanel'
 import AINavigationChat from './AINavigationChat'
-import { getBuildInfo } from '../config/buildInfo'
+import { getBuildInfo, fetchBuildInfo } from '../config/buildInfo'
 import AboutModal from './AboutModal'
 import SplashScreen from './SplashScreen'
 
 export default function AppShell(): JSX.Element {
-  const buildInfo = useMemo(() => getBuildInfo(), [])
+  const [buildInfo, setBuildInfo] = useState(() => getBuildInfo())
   const [aboutOpen, setAboutOpen] = useState(false)
   const [showSplash, setShowSplash] = useState(true)
 
   useEffect(() => {
     const t = setTimeout(() => setShowSplash(false), 1200)
     return () => clearTimeout(t)
+  }, [])
+
+  // Try to refine build info from Tauri when running in desktop app
+  useEffect(() => {
+    let mounted = true
+    fetchBuildInfo().then((bi) => {
+      if (mounted) setBuildInfo(bi)
+    }).catch(() => {})
+    return () => {
+      mounted = false
+    }
   }, [])
 
   // Tauri event wiring (no-op on web)

@@ -20,3 +20,22 @@ export function getBuildInfo(): BuildInfo {
   return { epoch, semver, gitSha, builtAtIso }
 }
 
+// Optional: augment build info from Tauri at runtime when available.
+export async function fetchBuildInfo(): Promise<BuildInfo> {
+  const base = getBuildInfo()
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const t = (await invoke('get_build_info')) as { epoch: string; semver: string; gitSha: string }
+    const epochNum = Number.parseInt(t.epoch, 10)
+    const merged: BuildInfo = {
+      epoch: Number.isFinite(epochNum) ? epochNum : base.epoch,
+      semver: t.semver || base.semver,
+      gitSha: t.gitSha || base.gitSha,
+      builtAtIso: new Date((Number.isFinite(epochNum) ? epochNum : base.epoch) * 1000).toISOString(),
+    }
+    return merged
+  } catch (_err) {
+    return base
+  }
+}
+
