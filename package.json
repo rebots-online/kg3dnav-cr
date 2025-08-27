@@ -1,0 +1,29 @@
+{
+  "name": "kg3d-navigator-cleanroom",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 49200"
+  },
+  "dependencies": {
+    "@react-three/drei": "^10.5.1",
+    "@react-three/fiber": "^9.0.0",
+    "framer-motion": "^10.16.5",
+    "framer-motion-3d": "^10.16.5",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "three": "^0.178.0",
+    "zustand": "^4.5.2"
+  },
+  "devDependencies": {
+    "@types/react": "18.2.21",
+    "@types/react-dom": "18.2.7",
+    "@vitejs/plugin-react": "^4.6.0",
+    "typescript": "5.5.4",
+    "vite": "^5.4.0"
+  }
+}
+
