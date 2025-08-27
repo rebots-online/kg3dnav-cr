@@ -1,0 +1,31 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "KG3D Navigator",
+  "version": "0.1.0",
+  "identifier": "com.rebots.kg3dnav",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:49200"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "3D Knowledge Graph Navigator",
+        "width": 1400,
+        "height": 1000,
+        "resizable": true
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "appimage", "msi", "nsis", "dmg"],
+    "identifier": "com.rebots.kg3dnav",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png"
+    ]
+  }
+}
+

@@ -105,9 +105,9 @@ Entry and routing
 - [ ] index.html — PWA-ready meta, root div, Vite module script
 
 Tauri runtime
-- [ ] src-tauri/src/main.rs — setup, menu with About, command get_build_info, event emits (set-layout, toggle-xray, reset-camera, toggle-sidebar)
-- [ ] src-tauri/build.rs — compute epoch + git sha env
-- [ ] tauri.conf.json — productName, identifiers, bundle targets: deb, AppImage, nsis exe, msi, dmg
+- [X] src-tauri/src/main.rs — setup, menu with About, command get_build_info, event emits (set-layout, toggle-xray, reset-camera, toggle-sidebar)
+- [X] src-tauri/build.rs — compute epoch + git sha env
+- [X] tauri.conf.json — productName, identifiers, bundle targets: deb, AppImage, nsis exe, msi, dmg
 
 CI/CD
 - [ ] .github/workflows/desktop.yml — matrix (ubuntu, windows, macos), stamp epoch, build tauri, rename artifacts with epoch
