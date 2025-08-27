@@ -6,11 +6,14 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview --port 49200"
+    "preview": "vite preview --port 49200",
+    "lint": "eslint --ext .ts,.tsx src",
+    "format": "prettier --write ."
   },
   "dependencies": {
     "@react-three/drei": "^10.5.1",
     "@react-three/fiber": "^9.0.0",
+    "@tauri-apps/api": "^2.0.0",
     "framer-motion": "^10.16.5",
     "framer-motion-3d": "^10.16.5",
     "react": "18.2.0",
@@ -22,6 +25,14 @@
     "@types/react": "18.2.21",
     "@types/react-dom": "18.2.7",
     "@vitejs/plugin-react": "^4.6.0",
+    "eslint": "^9.9.0",
+    "@typescript-eslint/parser": "^8.5.0",
+    "@typescript-eslint/eslint-plugin": "^8.5.0",
+    "eslint-plugin-react": "^7.35.0",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.2.1",
+    "prettier": "^3.3.3",
     "typescript": "5.5.4",
     "vite": "^5.4.0"
   }

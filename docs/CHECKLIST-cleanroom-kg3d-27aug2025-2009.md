@@ -114,9 +114,9 @@ CI/CD
 - [X] .github/workflows/web.yml — build Vite web + PWA, name artifact with epoch
 
 Quality gates
-- [ ] ESLint with react-hooks (rules-of-hooks, exhaustive-deps)
-- [ ] TypeScript strict mode; no implicit any
-- [ ] Prettier config
+- [X] ESLint with react-hooks (rules-of-hooks, exhaustive-deps)
+- [X] TypeScript strict mode; no implicit any
+- [X] Prettier config
 
 Release naming (epoch)
 - [ ] Artifact naming scheme: kg3d-navigator_${epoch}_${os}_${arch}.${ext}
