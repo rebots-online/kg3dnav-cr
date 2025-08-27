@@ -110,8 +110,8 @@ Tauri runtime
 - [X] tauri.conf.json — productName, identifiers, bundle targets: deb, AppImage, nsis exe, msi, dmg
 
 CI/CD
-- [ ] .github/workflows/desktop.yml — matrix (ubuntu, windows, macos), stamp epoch, build tauri, rename artifacts with epoch
-- [ ] .github/workflows/web.yml — build Vite web + PWA, name artifact with epoch
+- [X] .github/workflows/desktop.yml — matrix (ubuntu, windows, macos), stamp epoch, build tauri, rename artifacts with epoch
+- [X] .github/workflows/web.yml — build Vite web + PWA, name artifact with epoch
 
 Quality gates
 - [ ] ESLint with react-hooks (rules-of-hooks, exhaustive-deps)

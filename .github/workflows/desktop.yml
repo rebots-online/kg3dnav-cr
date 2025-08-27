@@ -1,0 +1,63 @@
+name: desktop
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Compute epoch
+        id: epoch
+        shell: bash
+        run: echo "epoch=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Build web (vite)
+        run: npm run build
+
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --locked
+
+      - name: Build desktop bundles
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: tauri build
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          find src-tauri/target -type f \( -name "*.deb" -o -name "*.AppImage" -o -name "*.msi" -o -name "*.exe" -o -name "*.dmg" \) -print0 | while IFS= read -r -d '' f; do
+            base=$(basename "$f")
+            ext=${base##*.}
+            osname=${{ matrix.os }}
+            osname=${osname/-latest/}
+            cp "$f" "artifacts/kg3d-navigator_${{ steps.epoch.outputs.epoch }}_${osname}.${ext}"
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop_${{ steps.epoch.outputs.epoch }}
+          path: artifacts/*
+
