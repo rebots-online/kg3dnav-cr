@@ -30,57 +30,57 @@ Repository structure (final)
 
 Type definitions
 - [X] Create src/types/knowledge.ts with:
-  - [ ] type Entity = { name: string; type: 'CONCEPT'|'PERSON'|'ORGANIZATION'|'LOCATION'|'EVENT'|'OTHER'; description?: string; uuid?: string; spatial_media?: { has_3d_scene?: boolean };
+  - [X] type Entity = { name: string; type: 'CONCEPT'|'PERSON'|'ORGANIZATION'|'LOCATION'|'EVENT'|'OTHER'; description?: string; uuid?: string; spatial_media?: { has_3d_scene?: boolean };
         searchRelevance?: 'uuid_coordinated'|'vector_semantic'|'audit_activity'|'text_search'; vectorMatch?: boolean; auditMatch?: boolean }
-  - [ ] type Relationship = { source: string; target: string; relationship: string; uuid?: string }
-  - [ ] type BuildInfo = { epoch: number; semver: string; gitSha: string; builtAtIso: string }
-  - [ ] type Layout = 'sphere'|'grid'|'concept-centric'
+  - [X] type Relationship = { source: string; target: string; relationship: string; uuid?: string }
+  - [X] type BuildInfo = { epoch: number; semver: string; gitSha: string; builtAtIso: string }
+  - [X] type Layout = 'sphere'|'grid'|'concept-centric'
 
 State and actions
 - [X] Implement src/state/store.ts exporting useStore with state:
-  - [ ] entities: Entity[]
-  - [ ] relationships: Relationship[]
-  - [ ] entityPositions: Record<string,[number,number,number]>
-  - [ ] layout: Layout; xRayMode: boolean; targetEntity: string|null
-  - [ ] highlightEntities: string[]; selectedRelationships: Relationship[]
-  - [ ] isSidebarOpen: boolean; caption: string; isFetching: boolean; resetCam: boolean
-  - [ ] searchQuery: string; entityTypeFilter: 'all'|Entity['type']
-  - [ ] richMediaMode: boolean; activeScene: unknown|null
-  - [ ] knowledgeGraphId: string|null; processingMethod: 'single'|'sharded'
-  - [ ] Methods: set* mutators, loadKnowledgeGraph(data), generateEntityPositions()
+  - [X] entities: Entity[]
+  - [X] relationships: Relationship[]
+  - [X] entityPositions: Record<string,[number,number,number]>
+  - [X] layout: Layout; xRayMode: boolean; targetEntity: string|null
+  - [X] highlightEntities: string[]; selectedRelationships: Relationship[]
+  - [X] isSidebarOpen: boolean; caption: string; isFetching: boolean; resetCam: boolean
+  - [X] searchQuery: string; entityTypeFilter: 'all'|Entity['type']
+  - [X] richMediaMode: boolean; activeScene: unknown|null
+  - [X] knowledgeGraphId: string|null; processingMethod: 'single'|'sharded'
+  - [X] Methods: set* mutators, loadKnowledgeGraph(data), generateEntityPositions()
 - [X] Implement src/state/actions.ts with pure functions:
-  - [ ] setLayout(layout: Layout)
-  - [ ] setTargetEntity(name: string|null)
-  - [ ] sendQuery(query: string)
-  - [ ] clearQuery()
-  - [ ] setXRayMode(enabled: boolean)
-  - [ ] toggleSidebar()
-  - [ ] setEntityTypeFilter(type: 'all'|Entity['type'])
-  - [ ] enterRichMediaMode(name: string)
-  - [ ] exitRichMediaMode()
-  - [ ] followRelationship(type: string, from: string, to: string)
-  - [ ] loadKnowledgeGraphData(payload: { knowledge_graph: { entities: Entity[]; relationships: Relationship[] }; metadata: any })
-  - [ ] resetCamera()
-  - [ ] analyzeEntity(name: string)
-  - [ ] highlightEntityType(type: Entity['type'])
-  - [ ] clearAllHighlights()
-  - [ ] highlightEntities(names: string[])
+  - [X] setLayout(layout: Layout)
+  - [X] setTargetEntity(name: string|null)
+  - [X] sendQuery(query: string)
+  - [X] clearQuery()
+  - [X] setXRayMode(enabled: boolean)
+  - [X] toggleSidebar()
+  - [X] setEntityTypeFilter(type: 'all'|Entity['type'])
+  - [X] enterRichMediaMode(name: string)
+  - [X] exitRichMediaMode()
+  - [X] followRelationship(type: string, from: string, to: string)
+  - [X] loadKnowledgeGraphData(payload: { knowledge_graph: { entities: Entity[]; relationships: Relationship[] }; metadata: any })
+  - [X] resetCamera()
+  - [X] analyzeEntity(name: string)
+  - [X] highlightEntityType(type: Entity['type'])
+  - [X] clearAllHighlights()
+  - [X] highlightEntities(names: string[])
 
 Layout engine
 - [X] Implement src/services/layoutEngine.ts:
-  - [ ] export function generatePositions(state): Record<string,[number,number,number]> supporting sphere, grid, concept-centric
+  - [X] export function generatePositions(state): Record<string,[number,number,number]> supporting sphere, grid, concept-centric
 
 MCP-backed loaders
 - [X] Implement src/config/env.ts exporting getEnvConfig(): { HKG_MCP_BASE_URL: string }
 - [X] Implement src/services/hkgLoader.ts with:
-  - [ ] findWorkingMCPServer(base: string): Promise<string|null>
-  - [ ] loadFromNeo4j(opts)
-  - [ ] loadFromQdrant(query: string)
-  - [ ] loadFromPostgreSQL()
-  - [ ] loadFromHKG(source: 'auto'|'neo4j'|'qdrant'|'postgresql')
-  - [ ] loadCenteredSubgraph(center: string, maxDepth: number, maxNodes: number)
-  - [ ] loadByEntityType(type: Entity['type'], limit: number, offset?: number)
-  - [ ] loadSearchResults(query: string, limit: number)
+  - [X] findWorkingMCPServer(base: string): Promise<string|null>
+  - [X] loadFromNeo4j(opts)
+  - [X] loadFromQdrant(query: string)
+  - [X] loadFromPostgreSQL()
+  - [X] loadFromHKG(source: 'auto'|'neo4j'|'qdrant'|'postgresql')
+  - [X] loadCenteredSubgraph(center: string, maxDepth: number, maxNodes: number)
+  - [X] loadByEntityType(type: Entity['type'], limit: number, offset?: number)
+  - [X] loadSearchResults(query: string, limit: number)
   - [ ] searchShardedHKG(topic: string, options)
   - [ ] initializeHKG(options)
 
