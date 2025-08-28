@@ -78,4 +78,4 @@ Do not commit secrets. CI and local builds may use environment variables such as
 
 ## License
 
-Apache-2.0
+Proprietary — Copyright (C)2025 Robin L. M. Cheung, MBA. All Rights Reserved.
