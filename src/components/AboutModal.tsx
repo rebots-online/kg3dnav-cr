@@ -32,7 +32,7 @@ export default function AboutModal({ buildInfo, onClose }: { buildInfo: BuildInf
       >
         <h2 style={{ marginTop: 0 }}>3D Knowledge Graph Navigator</h2>
         <div>Version: v{buildInfo.semver}</div>
-        <div>Build: {buildInfo.epoch}</div>
+        <div>Build: {buildInfo.buildNumber} (epoch minutes {buildInfo.epochMinutes})</div>
         <div>Commit: {buildInfo.gitSha}</div>
         <div>Built: {buildInfo.builtAtIso}</div>
         <div style={{ marginTop: 12, fontSize: 13, color: '#ccc' }}>

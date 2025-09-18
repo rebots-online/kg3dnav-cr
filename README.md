@@ -10,43 +10,43 @@ This repo targets both desktop (Tauri 2) and web (PWA). It preserves the aesthet
 
 ## Build info and version stamping
 
-The app displays version/build info in two places:
-- Splash overlay: shows the build epoch
-- Help > About: shows `v{semver} • build {epoch} • {gitSha}` and ISO timestamp
+The app surfaces release metadata in multiple locations:
+- Splash overlay: brand title plus `v{semver}` and `build {buildNumber}`.
+- Help ▸ About dialog: `Version v{semver}`, `Build {buildNumber} (epoch minutes {epochMinutes})`, git commit, ISO timestamp.
+- Bottom-right status capsule: `v{semver} • build {buildNumber}` on the first line and `sha {shortSha} • minutes {epochMinutes}` underneath.
+
+Build number format:
+- Canonical five-character identifier derived from the Unix epoch in minutes, encoded base36 and left-padded (e.g., `H1K9Z`).
+- Corresponding epoch minutes remain available for long-term ordering.
 
 Sources of truth:
-- Web/PWA: Vite build-time defines
-- Desktop (Tauri): runtime command `get_build_info` with values provided via `src-tauri/build.rs`
+- Web/PWA: Vite build-time defines exported in `vite.config.ts`.
+- Desktop/mobile (Tauri): runtime command `get_build_info` backed by environment values emitted in `src-tauri/build.rs`.
 
 Implementation details:
-- `vite.config.ts` sets:
-  - `__BUILD_EPOCH__` — seconds since epoch at build time
-  - `__BUILD_SEMVER__` — `package.json` version
-  - `__GIT_SHA__` — from env (`GITHUB_SHA`/`GIT_COMMIT`), otherwise `unknown`
+- `vite.config.ts` defines:
+  - `__BUILD_MINUTES__` — epoch minutes at build time.
+  - `__BUILD_NUMBER__` — canonical five-character base36 code.
+  - `__BUILD_EPOCH__` — seconds (for compatibility).
+  - `__BUILD_SEMVER__`, `__GIT_SHA__` — derived from environment.
 - `src/config/buildInfo.ts`
-  - `getBuildInfo()` returns the Vite-defined values (with safe fallbacks)
-  - `fetchBuildInfo()` attempts to call Tauri’s `get_build_info` to refine values on desktop
-- `src-tauri/build.rs` injects `BUILD_EPOCH` and `GIT_SHA`
-- `src-tauri/src/main.rs` exposes `#[tauri::command] get_build_info`
+  - `getBuildInfo()` synthesizes `BuildInfo { buildNumber, epochMinutes, semver, gitSha, builtAtIso }` with runtime fallbacks.
+  - `fetchBuildInfo()` resolves the Tauri command (when available) and merges desktop/mobile overrides.
+- `src-tauri/build.rs` emits `BUILD_MINUTES`, `BUILD_NUMBER`, `BUILD_EPOCH`, `GIT_SHA` at compile time.
+- `src-tauri/src/main.rs` exposes `#[tauri::command] get_build_info` returning both camelCase and legacy fields for the UI bridge.
 
 ## Artifact naming
 
-Desktop workflow collects build outputs and renames them with epoch, OS, and arch:
+The GitHub Actions build matrix collects platform outputs and renames them with product, platform, and build number context:
 
 ```
-kg3d-navigator_{epoch}_{os}_{arch}.{ext}
+KG3D-Navigator_{platform}_{buildNumber}_{originalFilename}
 ```
 
 Examples:
-- `kg3d-navigator_1724700000_ubuntu_amd64.AppImage`
-- `kg3d-navigator_1724700000_macos_arm64.dmg`
-- `kg3d-navigator_1724700000_windows_amd64.msi`
-
-Web workflow uploads Vite build output as:
-
-```
-web_{epoch}
-```
+- `KG3D-Navigator_linux_H1K9Z_KG3D Navigator_0.1.0_amd64.AppImage`
+- `KG3D-Navigator_windows_H1K9Z_KG3D Navigator_0.1.0_x64_en-US.msi`
+- `KG3D-Navigator_android_H1K9Z-app-release.apk`
 
 ## Prerequisites
 
@@ -69,8 +69,9 @@ The desktop CI workflow runs the same steps across Ubuntu, Windows, and macOS.
 
 ## CI/CD
 
-- `.github/workflows/desktop.yml` — matrix desktop builds; epoch-stamped artifact names with `{os}_{arch}`
-- `.github/workflows/web.yml` — web PWA build with epoch-stamped artifact name
+- `.github/workflows/build-matrix.yml` — cross-platform desktop/mobile builds with five-digit build numbering baked into artifact names.
+- `.github/workflows/web.yml` — web/PWA build (legacy workflow retained for compatibility).
+- See `docs/operations/ci-build-readiness-20250918.md` for platform dependency setup, signing secrets, and local reproduction guidance.
 
 ## Security and secrets
 

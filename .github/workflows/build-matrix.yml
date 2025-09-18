@@ -1,0 +1,200 @@
+name: Build Matrix
+
+on:
+  push:
+    branches:
+      - '**'
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '20'
+  RUST_VERSION: 'stable'
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      build-number: ${{ steps.meta.outputs.build_number }}
+      build-minutes: ${{ steps.meta.outputs.build_minutes }}
+      build-epoch: ${{ steps.meta.outputs.build_epoch }}
+      build-iso: ${{ steps.meta.outputs.build_iso }}
+      semver: ${{ steps.pkg.outputs.semver }}
+      git-sha: ${{ steps.sha.outputs.git_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - id: meta
+        run: |
+          set -euo pipefail
+          eval "$(node scripts/compute-build-metadata.mjs)"
+          echo "build_number=$BUILD_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "build_minutes=$BUILD_MINUTES" >> "$GITHUB_OUTPUT"
+          echo "build_epoch=$BUILD_EPOCH" >> "$GITHUB_OUTPUT"
+          echo "build_iso=$BUILD_ISO" >> "$GITHUB_OUTPUT"
+      - id: pkg
+        run: |
+          echo "semver=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+      - id: sha
+        run: echo "git_sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+  desktop:
+    needs: metadata
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bundles: "appimage deb"
+            artifact_glob: "src-tauri/target/release/bundle/**/*.{AppImage,appimage,deb}"
+            platform: linux
+          - os: windows-latest
+            bundles: "msi nsis"
+            artifact_glob: "src-tauri/target/release/bundle/**/*.{msi,exe}"
+            platform: windows
+          - os: macos-latest
+            bundles: "dmg"
+            artifact_glob: "src-tauri/target/release/bundle/**/*.{dmg}"
+            platform: macos
+    runs-on: ${{ matrix.os }}
+    env:
+      BUILD_NUMBER: ${{ needs.metadata.outputs.build-number }}
+      BUILD_MINUTES: ${{ needs.metadata.outputs.build-minutes }}
+      BUILD_EPOCH: ${{ needs.metadata.outputs.build-epoch }}
+      BUILD_ISO: ${{ needs.metadata.outputs.build-iso }}
+      GIT_COMMIT: ${{ needs.metadata.outputs.git-sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - name: Install Linux prerequisites
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+      - name: Install Windows tooling
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          choco install wixtoolset --no-progress -y
+          choco install nsis --no-progress -y
+      - name: Install macOS dmg tooling
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew update
+          brew install create-dmg
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+      - name: Install dependencies
+        run: npm ci
+      - name: Build Tauri bundle
+        run: npx tauri build --bundles ${{ matrix.bundles }}
+      - name: Collect artifacts
+        shell: bash
+        env:
+          ARTIFACT_GLOB: ${{ matrix.artifact_glob }}
+          PLATFORM_LABEL: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          shopt -s nullglob globstar
+          for file in $ARTIFACT_GLOB; do
+            if [ -f "$file" ]; then
+              filename="$(basename "$file")"
+              newname="KG3D-Navigator_${PLATFORM_LABEL}_${BUILD_NUMBER}_${filename}"
+              cp "$file" "artifacts/${newname}"
+            fi
+          done
+          ls -R artifacts
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ format('kg3dnav-{0}-{1}', matrix.platform, needs.metadata.outputs.build-number) }}
+          path: artifacts
+          if-no-files-found: error
+
+  android:
+    needs: metadata
+    runs-on: ubuntu-latest
+    env:
+      BUILD_NUMBER: ${{ needs.metadata.outputs.build-number }}
+      BUILD_MINUTES: ${{ needs.metadata.outputs.build-minutes }}
+      BUILD_EPOCH: ${{ needs.metadata.outputs.build-epoch }}
+      BUILD_ISO: ${{ needs.metadata.outputs.build-iso }}
+      GIT_COMMIT: ${{ needs.metadata.outputs.git-sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Install Linux prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+      - name: Cache npm
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: android-npm-${{ hashFiles('package-lock.json') }}
+      - name: Configure Rust for Android
+        run: |
+          rustup target add aarch64-linux-android armv7-linux-androideabi
+          cargo install cargo-ndk --locked
+      - name: Install dependencies
+        run: npm ci
+      - name: Build Android bundle
+        run: npx tauri android build
+      - name: Collect APK artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          find src-tauri -type f -name '*.apk' -print0 | while IFS= read -r -d '' file; do
+            filename="$(basename "${file}")"
+            newname="KG3D-Navigator_android_${BUILD_NUMBER}_${filename}"
+            cp "${file}" "artifacts/${newname}"
+          done
+          ls -R artifacts
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ format('kg3dnav-android-{0}', needs.metadata.outputs.build-number) }}
+          path: artifacts
+          if-no-files-found: error

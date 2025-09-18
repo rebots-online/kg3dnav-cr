@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import React from 'react'
+import type { BuildInfo } from '../types/knowledge'
 
-export default function SplashScreen({ epoch }: { epoch: number }): JSX.Element {
+export default function SplashScreen({ buildInfo }: { buildInfo: BuildInfo }): JSX.Element {
   return (
     <div
       style={{
@@ -28,7 +29,8 @@ export default function SplashScreen({ epoch }: { epoch: number }): JSX.Element 
         }}
       >
         <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 8 }}>3D Knowledge Graph Navigator</div>
-        <div style={{ fontSize: 14, color: '#ccc' }}>build {epoch}</div>
+        <div style={{ fontSize: 14, color: '#ccc', marginBottom: 4 }}>v{buildInfo.semver}</div>
+        <div style={{ fontSize: 14, color: '#ccc' }}>build {buildInfo.buildNumber}</div>
       </div>
     </div>
   )
