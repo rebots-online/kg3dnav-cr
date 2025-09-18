@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import React, { useMemo, useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import Canvas3D from './Canvas3D'
 import Sidebar from './Sidebar'
 import DataSourcePanel from './DataSourcePanel'
@@ -36,7 +36,7 @@ export default function AppShell(): JSX.Element {
       try {
         const { listen } = await import('@tauri-apps/api/event')
         const u1 = await listen('about', () => setAboutOpen(true))
-        const u2 = await listen('set-layout', (e) => {
+        const u2 = await listen('set-layout', async (e) => {
           const val = (e.payload as any) as 'concept-centric' | 'sphere' | 'grid'
           const { setLayout } = await import('../state/actions')
           setLayout(val)
@@ -87,13 +87,31 @@ export default function AppShell(): JSX.Element {
             padding: '8px 12px',
             cursor: 'pointer',
           }}
-          title={`v${buildInfo.semver} • build ${buildInfo.epoch} • ${buildInfo.gitSha.substring(0,7)}`}
+          title={`v${buildInfo.semver} • build ${buildInfo.buildNumber} (min ${buildInfo.epochMinutes}) • ${buildInfo.gitSha.substring(0, 7)}`}
         >
           About
         </button>
       </div>
 
-      {showSplash && <SplashScreen epoch={buildInfo.epoch} />}
+      <div
+        style={{
+          position: 'absolute',
+          right: 12,
+          bottom: 12,
+          background: 'rgba(0,0,0,0.7)',
+          color: 'rgba(255,255,255,0.9)',
+          borderRadius: 8,
+          padding: '6px 12px',
+          fontSize: 12,
+          fontFamily: 'Inter, sans-serif',
+          border: '1px solid rgba(255,255,255,0.1)',
+        }}
+      >
+        <div>{`v${buildInfo.semver} • build ${buildInfo.buildNumber}`}</div>
+        <div style={{ opacity: 0.8 }}>{`sha ${buildInfo.gitSha.substring(0, 7)} • minutes ${buildInfo.epochMinutes}`}</div>
+      </div>
+
+      {showSplash && <SplashScreen buildInfo={buildInfo} />}
       {aboutOpen && <AboutModal buildInfo={buildInfo} onClose={() => setAboutOpen(false)} />}
     </main>
   )

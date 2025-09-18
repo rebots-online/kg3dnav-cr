@@ -23,3 +23,7 @@ Origin UUID: 01928c5d-2000-8000-8000-000000000001
 | 0f379cd6-26e8-4530-a54c-9fa6c8487773   | CI_Desktop        | .github/workflows/desktop.yml                                                                             | Multi-platform desktop builds |
 | 40093f97-5caa-42d4-899d-ff6ee50c2ba2   | CI_WebPWA         | .github/workflows/web.yml                                                                                 | Web/PWA builds |
 
+| d0280e75-0574-8145-b8d4-1668bc361548   | BuildMetadataScript | scripts/compute-build-metadata.mjs
+                                         | CLI to emit epoch-minute build constants |
+| b2adc83b-1f76-800f-acd8-ee503ec03f62   | CI_BuildMatrix    | .github/workflows/build-matrix.yml
+                                         | Cross-platform desktop/mobile build & artifact automation |

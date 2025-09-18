@@ -29,7 +29,8 @@ export type Relationship = {
 }
 
 export type BuildInfo = {
-  epoch: number // seconds since epoch or ms? We will use seconds for filenames readability
+  buildNumber: string // canonical five-character identifier derived from epoch minutes
+  epochMinutes: number
   semver: string
   gitSha: string
   builtAtIso: string
