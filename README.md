@@ -71,6 +71,7 @@ The desktop CI workflow runs the same steps across Ubuntu, Windows, and macOS.
 
 - `.github/workflows/build-matrix.yml` — cross-platform desktop/mobile builds with five-digit build numbering baked into artifact names.
 - `.github/workflows/web.yml` — web/PWA build (legacy workflow retained for compatibility).
+- See `docs/operations/ci-build-readiness-20250918.md` for platform dependency setup, signing secrets, and local reproduction guidance.
 
 ## Security and secrets
 

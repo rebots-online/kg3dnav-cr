@@ -74,6 +74,28 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: ${{ env.RUST_VERSION }}
+      - name: Install Linux prerequisites
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+      - name: Install Windows tooling
+        if: matrix.os == 'windows-latest'
+        shell: powershell
+        run: |
+          choco install wixtoolset --no-progress -y
+          choco install nsis --no-progress -y
+      - name: Install macOS dmg tooling
+        if: matrix.os == 'macos-latest'
+        run: |
+          brew update
+          brew install create-dmg
       - name: Cache npm
         uses: actions/cache@v4
         with:
@@ -136,11 +158,25 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
       - uses: android-actions/setup-android@v3
+      - name: Install Linux prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
       - name: Cache npm
         uses: actions/cache@v4
         with:
           path: ~/.npm
           key: android-npm-${{ hashFiles('package-lock.json') }}
+      - name: Configure Rust for Android
+        run: |
+          rustup target add aarch64-linux-android armv7-linux-androideabi
+          cargo install cargo-ndk --locked
       - name: Install dependencies
         run: npm ci
       - name: Build Android bundle
