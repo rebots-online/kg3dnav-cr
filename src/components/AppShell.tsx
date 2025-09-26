@@ -4,6 +4,7 @@ import Canvas3D from './Canvas3D'
 import Sidebar from './Sidebar'
 import DataSourcePanel from './DataSourcePanel'
 import AINavigationChat from './AINavigationChat'
+import ConnectionSettingsDrawer from './ConnectionSettingsDrawer'
 import { getBuildInfo, fetchBuildInfo } from '../config/buildInfo'
 import AboutModal from './AboutModal'
 import SplashScreen from './SplashScreen'
@@ -12,6 +13,7 @@ export default function AppShell(): JSX.Element {
   const [buildInfo, setBuildInfo] = useState(() => getBuildInfo())
   const [aboutOpen, setAboutOpen] = useState(false)
   const [showSplash, setShowSplash] = useState(true)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   useEffect(() => {
     const t = setTimeout(() => setShowSplash(false), 1200)
@@ -21,9 +23,11 @@ export default function AppShell(): JSX.Element {
   // Try to refine build info from Tauri when running in desktop app
   useEffect(() => {
     let mounted = true
-    fetchBuildInfo().then((bi) => {
-      if (mounted) setBuildInfo(bi)
-    }).catch(() => {})
+    fetchBuildInfo()
+      .then((bi) => {
+        if (mounted) setBuildInfo(bi)
+      })
+      .catch(() => {})
     return () => {
       mounted = false
     }
@@ -37,7 +41,7 @@ export default function AppShell(): JSX.Element {
         const { listen } = await import('@tauri-apps/api/event')
         const u1 = await listen('about', () => setAboutOpen(true))
         const u2 = await listen('set-layout', async (e) => {
-          const val = (e.payload as any) as 'concept-centric' | 'sphere' | 'grid'
+          const val = e.payload as any as 'concept-centric' | 'sphere' | 'grid'
           const { setLayout } = await import('../state/actions')
           setLayout(val)
         })
@@ -63,7 +67,9 @@ export default function AppShell(): JSX.Element {
     void wire()
     return () => {
       unsubs.forEach((u) => {
-        try { u() } catch (_) {}
+        try {
+          u()
+        } catch (_) {}
       })
     }
   }, [])
@@ -72,8 +78,9 @@ export default function AppShell(): JSX.Element {
     <main style={{ width: '100%', height: '100vh', position: 'relative' }}>
       <Canvas3D />
       <Sidebar />
-      <DataSourcePanel />
-      <AINavigationChat />
+      <DataSourcePanel onOpenSettings={() => setSettingsOpen(true)} />
+      <AINavigationChat onOpenSettings={() => setSettingsOpen(true)} />
+      <ConnectionSettingsDrawer isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
       {/* Header with stats and About */}
       <div style={{ position: 'absolute', top: 10, left: 10, display: 'flex', gap: 8 }}>
@@ -92,6 +99,25 @@ export default function AppShell(): JSX.Element {
           About
         </button>
       </div>
+      <div style={{ position: 'absolute', top: 10, left: 120, display: 'flex' }}>
+        <button
+          onClick={() => setSettingsOpen(true)}
+          style={{
+            background: 'rgba(0,0,0,0.7)',
+            color: 'white',
+            border: '1px solid rgba(255,255,255,0.2)',
+            borderRadius: 8,
+            padding: '8px 12px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+          }}
+          title="Connection & LLM settings"
+        >
+          ⚙️ Settings
+        </button>
+      </div>
 
       <div
         style={{
@@ -108,7 +134,9 @@ export default function AppShell(): JSX.Element {
         }}
       >
         <div>{`v${buildInfo.semver} • build ${buildInfo.buildNumber}`}</div>
-        <div style={{ opacity: 0.8 }}>{`sha ${buildInfo.gitSha.substring(0, 7)} • minutes ${buildInfo.epochMinutes}`}</div>
+        <div
+          style={{ opacity: 0.8 }}
+        >{`sha ${buildInfo.gitSha.substring(0, 7)} • minutes ${buildInfo.epochMinutes}`}</div>
       </div>
 
       {showSplash && <SplashScreen buildInfo={buildInfo} />}
@@ -116,4 +144,3 @@ export default function AppShell(): JSX.Element {
     </main>
   )
 }
-
