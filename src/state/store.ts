@@ -62,7 +62,12 @@ export interface AppState {
   getEntityConnections: (name: string) => Relationship[]
 
   // Bulk ops
-  loadKnowledgeGraph: (payload: { knowledge_graph: { entities: Entity[]; relationships: Relationship[] }; metadata?: any }) => void
+  loadKnowledgeGraph: (
+    payload: {
+      knowledge_graph: { entities: Entity[]; relationships: Relationship[] }
+      metadata?: Record<string, unknown>
+    }
+  ) => void
   generateEntityPositions: () => void
 }
 
@@ -161,27 +166,45 @@ export const useStore = create<AppState>()(
   }))
 )
 
-// Convenience selector bundle mirroring prior pattern
-;(useStore as any).use = {
-  entities: () => useStore((s) => s.entities),
-  relationships: () => useStore((s) => s.relationships),
-  entityPositions: () => useStore((s) => s.entityPositions),
-  layout: () => useStore((s) => s.layout),
-  highlightEntities: () => useStore((s) => s.highlightEntities),
-  xRayMode: () => useStore((s) => s.xRayMode),
-  isSidebarOpen: () => useStore((s) => s.isSidebarOpen),
-  caption: () => useStore((s) => s.caption),
-  isFetching: () => useStore((s) => s.isFetching),
-  entityTypeFilter: () => useStore((s) => s.entityTypeFilter),
-  resetCam: () => useStore((s) => s.resetCam),
-  targetEntity: () => useStore((s) => s.targetEntity),
-  searchQuery: () => useStore((s) => s.searchQuery),
-  richMediaMode: () => useStore((s) => s.richMediaMode),
-  activeScene: () => useStore((s) => s.activeScene),
-  selectedRelationships: () => useStore((s) => s.selectedRelationships),
-  knowledgeGraphId: () => useStore((s) => s.knowledgeGraphId),
-  processingMethod: () => useStore((s) => s.processingMethod),
+type StoreWithSelectors = typeof useStore & {
+  useEntities: () => Entity[]
+  useRelationships: () => Relationship[]
+  useEntityPositions: () => Record<string, Position>
+  useLayout: () => Layout
+  useHighlightEntities: () => string[]
+  useXRayMode: () => boolean
+  useIsSidebarOpen: () => boolean
+  useCaption: () => string
+  useIsFetching: () => boolean
+  useEntityTypeFilter: () => 'all' | Entity['type']
+  useResetCam: () => boolean
+  useTargetEntity: () => string | null
+  useSearchQuery: () => string
+  useRichMediaMode: () => boolean
+  useActiveScene: () => unknown | null
+  useSelectedRelationships: () => Relationship[]
+  useKnowledgeGraphId: () => string | null
+  useProcessingMethod: () => ProcessingMethod
 }
+
+export const useEntities = () => useStore((s) => s.entities)
+export const useRelationships = () => useStore((s) => s.relationships)
+export const useEntityPositions = () => useStore((s) => s.entityPositions)
+export const useLayout = () => useStore((s) => s.layout)
+export const useHighlightEntities = () => useStore((s) => s.highlightEntities)
+export const useXRayMode = () => useStore((s) => s.xRayMode)
+export const useIsSidebarOpen = () => useStore((s) => s.isSidebarOpen)
+export const useCaption = () => useStore((s) => s.caption)
+export const useIsFetching = () => useStore((s) => s.isFetching)
+export const useEntityTypeFilter = () => useStore((s) => s.entityTypeFilter)
+export const useResetCam = () => useStore((s) => s.resetCam)
+export const useTargetEntity = () => useStore((s) => s.targetEntity)
+export const useSearchQuery = () => useStore((s) => s.searchQuery)
+export const useRichMediaMode = () => useStore((s) => s.richMediaMode)
+export const useActiveScene = () => useStore((s) => s.activeScene)
+export const useSelectedRelationships = () => useStore((s) => s.selectedRelationships)
+export const useKnowledgeGraphId = () => useStore((s) => s.knowledgeGraphId)
+export const useProcessingMethod = () => useStore((s) => s.processingMethod)
 
 export default useStore
 

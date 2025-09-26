@@ -2,7 +2,18 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useThree, useFrame } from '@react-three/fiber'
 import { TrackballControls } from '@react-three/drei'
-import useStore from '../state/store'
+import type { Group } from 'three'
+import type { TrackballControls as TrackballControlsImpl } from 'three-stdlib'
+import useStore, {
+  useEntities,
+  useRelationships,
+  useEntityPositions,
+  useLayout,
+  useHighlightEntities,
+  useTargetEntity,
+  useXRayMode,
+  useResetCam,
+} from '../state/store'
 import { animate } from 'framer-motion'
 import KnowledgeNode from './KnowledgeNode'
 
@@ -25,19 +36,19 @@ function RelationshipLine({ relationship, entityPositions }: { relationship: { s
 }
 
 export default function Scene3D(): JSX.Element {
-  const entities = useStore.use.entities()
-  const relationships = useStore.use.relationships()
-  const entityPositions = useStore.use.entityPositions()
-  const layout = useStore.use.layout()
-  const highlightEntities = useStore.use.highlightEntities()
-  const targetEntity = useStore.use.targetEntity()
-  const xRayMode = useStore.use.xRayMode()
-  const resetCam = useStore.use.resetCam()
+  const entities = useEntities()
+  const relationships = useRelationships()
+  const entityPositions = useEntityPositions()
+  const layout = useLayout()
+  const highlightEntities = useHighlightEntities()
+  const targetEntity = useTargetEntity()
+  const xRayMode = useXRayMode()
+  const resetCam = useResetCam()
   const { camera } = useThree()
-  const groupRef = useRef<any>()
-  const controlsRef = useRef<any>()
+  const groupRef = useRef<Group | null>(null)
+  const controlsRef = useRef<TrackballControlsImpl | null>(null)
   const [isAutoRotating, setIsAutoRotating] = useState(false)
-  const inactivityTimerRef = useRef<any>(null)
+  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const rotationVelocityRef = useRef(0)
 
   const cameraDistance = 25
@@ -169,7 +180,7 @@ export default function Scene3D(): JSX.Element {
       <pointLight position={[-10, -10, -5]} intensity={0.5} />
 
       <TrackballControls
-        ref={controlsRef as any}
+        ref={controlsRef}
         onStart={() => handleInteractionStart()}
         onEnd={() => handleInteractionEnd()}
         minDistance={10}
@@ -193,7 +204,7 @@ export default function Scene3D(): JSX.Element {
         </group>
       )}
 
-      <group ref={groupRef as any}>
+      <group ref={groupRef}>
         {relationships.map((rel, idx) => (
           <RelationshipLine key={`${rel.source}-${rel.target}-${idx}`} relationship={rel} entityPositions={entityPositions} />
         ))}

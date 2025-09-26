@@ -60,6 +60,27 @@ Examples:
 - Start dev server: `npm run dev`
 - Build web (dist/): `npm run build`
 
+## Connection configuration
+
+- Use the ⚙️ Settings button (or the cog in the data source panel) to open the connection drawer.
+- Defaults target `http://192.168.0.71` for the unified hKG MCP endpoint (`:49160`) and service-specific ports (Neo4j `:7474`, Qdrant `:6333`, PostgreSQL `:5432`, Ollama `:11434`).
+- Toggle between **Unified MCP** and **Per-service** modes. Per-service mode issues requests directly to the configured endpoints and supports basic auth/API keys.
+- Settings persist in browser/local storage; the reset button restores the 192.168.0.71 defaults.
+- Hybrid knowledge graph sync endpoints are not reachable in this sandbox; update the settings to point at a reachable MCP host when running on your network.
+
+## JSON knowledge graph uploads
+
+- Select **File Upload** in the Data Sources panel to ingest local JSON knowledge graphs.
+- The loader accepts either `{ knowledge_graph: { entities, relationships } }` or a top-level `{ entities, relationships }` object and annotates metadata with timestamp, filename, and file size.
+- Uploaded data is processed with the same typing pipeline used for live hKG responses, so downstream layout/AI navigation behaves identically.
+
+## AI navigator LLMs
+
+- The AI Navigator now calls Ollama first (default `http://192.168.0.71:11434`, model `llama3.1`) and falls back to OpenRouter (`x-ai/grok-4-fast:free`).
+- Configure the OpenRouter API key and base URL from the Settings drawer under the **LLM** tab.
+- When both providers are unreachable the chat surfaces a warning and a quick link to open Settings.
+
+
 ## Desktop build (Tauri)
 
 - Install Tauri CLI: `cargo install tauri-cli --locked`

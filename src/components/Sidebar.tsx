@@ -1,9 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 import React, { useMemo, useState } from 'react'
-import useStore from '../state/store'
+import useStore, {
+  useIsSidebarOpen,
+  useEntities,
+  useHighlightEntities,
+  useTargetEntity,
+  useSearchQuery,
+  useEntityTypeFilter,
+} from '../state/store'
 import { analyzeEntity, followRelationship, setTargetEntity } from '../state/actions'
 
-function colorFor(type: ReturnType<typeof useStore> extends any ? string : string) {
+function colorFor(type: string) {
   const m: Record<string, string> = {
     PERSON: '#FF6B6B',
     ORGANIZATION: '#4ECDC4',
@@ -16,12 +23,12 @@ function colorFor(type: ReturnType<typeof useStore> extends any ? string : strin
 }
 
 export default function Sidebar(): JSX.Element | null {
-  const isOpen = useStore.use.isSidebarOpen()
-  const entities = useStore.use.entities()
-  const highlightEntities = useStore.use.highlightEntities()
-  const targetEntity = useStore.use.targetEntity()
-  const searchQuery = useStore.use.searchQuery()
-  const entityTypeFilter = useStore.use.entityTypeFilter()
+  const isOpen = useIsSidebarOpen()
+  const entities = useEntities()
+  const highlightEntities = useHighlightEntities()
+  const targetEntity = useTargetEntity()
+  const searchQuery = useSearchQuery()
+  const entityTypeFilter = useEntityTypeFilter()
   const getEntityConnections = (name: string) => useStore.getState().getEntityConnections(name)
 
   const [sortBy, setSortBy] = useState<'name' | 'type' | 'connections'>('name')

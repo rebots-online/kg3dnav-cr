@@ -104,7 +104,7 @@ export const followRelationship = (relationshipType: string, fromEntity: string,
 // Knowledge graph loading
 export const loadKnowledgeGraphData = (payload: {
   knowledge_graph: { entities: Entity[]; relationships: Relationship[] }
-  metadata?: any
+  metadata?: Record<string, unknown>
 }) => {
   const s = useStore.getState()
   s.setFetching(true)
