@@ -5,7 +5,7 @@ import Sidebar from './Sidebar'
 import DataSourcePanel from './DataSourcePanel'
 import AINavigationChat from './AINavigationChat'
 import ConnectionSettingsDrawer from './ConnectionSettingsDrawer'
-import { getBuildInfo, fetchBuildInfo } from '../config/buildInfo'
+import { getBuildInfo, fetchBuildInfo, formatVersionBuildForDisplay } from '../config/buildInfo'
 import AboutModal from './AboutModal'
 import SplashScreen from './SplashScreen'
 
@@ -133,7 +133,7 @@ export default function AppShell(): JSX.Element {
           border: '1px solid rgba(255,255,255,0.1)',
         }}
       >
-        <div>{`${buildInfo.versionBuild} • v${buildInfo.semver}`}</div>
+        <div>{`${formatVersionBuildForDisplay(buildInfo.versionBuild)} • v${buildInfo.semver}`}</div>
         <div
           style={{ opacity: 0.8 }}
         >{`build ${buildInfo.buildNumber} • sha ${buildInfo.gitSha.substring(0, 7)} • minutes ${buildInfo.epochMinutes}`}</div>

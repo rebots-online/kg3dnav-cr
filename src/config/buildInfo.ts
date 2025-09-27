@@ -17,6 +17,8 @@ declare const __BUILD_SEMVER__: string
 declare const __GIT_SHA__: string
 declare const __VERSION_BUILD__: string
 
+const VERSION_BUILD_PATTERN = /^v\d+\.\d{2}\d{4}$/
+
 export function computeEpochMinutes(): number {
   return Math.floor(Date.now() / 60000)
 }
@@ -27,17 +29,36 @@ export function formatBuildNumber(epochMinutes: number): string {
   return tail.padStart(5, '0')
 }
 
+export function formatVersionBuildForDisplay(versionBuild: string): string {
+  if (typeof versionBuild !== 'string') return versionBuild
+  const match = versionBuild.match(/^(v\d+\.\d{2})(\d{4})$/)
+  if (!match) return versionBuild
+  return `${match[1]}.${match[2]}`
+}
+
+function sanitizeVersionBuild(raw: unknown, semver: string, epochSeconds: number): string {
+  if (typeof raw === 'string' && VERSION_BUILD_PATTERN.test(raw)) {
+    return raw
+  }
+  return computeVersionBuild(semver, epochSeconds)
+}
+
 export function getBuildInfo(): BuildInfo {
-  const minutes = (typeof __BUILD_MINUTES__ !== 'undefined' ? __BUILD_MINUTES__ : computeEpochMinutes()) as number
-  const buildNumber = (typeof __BUILD_NUMBER__ !== 'undefined' ? __BUILD_NUMBER__ : formatBuildNumber(minutes)) as string
+  const minutes = (
+    typeof __BUILD_MINUTES__ !== 'undefined' ? __BUILD_MINUTES__ : computeEpochMinutes()
+  ) as number
+  const buildNumber = (
+    typeof __BUILD_NUMBER__ !== 'undefined' ? __BUILD_NUMBER__ : formatBuildNumber(minutes)
+  ) as string
   const epochSeconds =
     typeof __BUILD_EPOCH__ !== 'undefined' ? (__BUILD_EPOCH__ as number) : Math.floor(minutes * 60)
   const semver = (typeof __BUILD_SEMVER__ !== 'undefined' ? __BUILD_SEMVER__ : '0.0.0-dev') as string
   const gitSha = (typeof __GIT_SHA__ !== 'undefined' ? __GIT_SHA__ : 'unknown') as string
-  const versionBuild =
-    (typeof __VERSION_BUILD__ !== 'undefined'
-      ? (__VERSION_BUILD__ as string)
-      : computeVersionBuild(semver, epochSeconds)) ?? computeVersionBuild(semver, epochSeconds)
+  const versionBuild = sanitizeVersionBuild(
+    typeof __VERSION_BUILD__ !== 'undefined' ? (__VERSION_BUILD__ as string) : undefined,
+    semver,
+    epochSeconds
+  )
   const builtAtIso = new Date(minutes * 60000).toISOString()
   return { buildNumber, epochMinutes: minutes, semver, gitSha, builtAtIso, versionBuild }
 }
@@ -62,10 +83,15 @@ export async function fetchBuildInfo(): Promise<BuildInfo> {
     const effectiveMinutes = Number.isFinite(epochMinutesNum) ? epochMinutesNum : base.epochMinutes
     const epochSeconds = Number.isFinite(epochMinutesNum) ? epochMinutesNum * 60 : base.epochMinutes * 60
     const resolvedSemver = t.semver || base.semver
-    const resolvedVersionBuild =
-      t.versionBuild || t.version_build || computeVersionBuild(resolvedSemver, epochSeconds)
+    const resolvedVersionBuild = sanitizeVersionBuild(
+      t.versionBuild || t.version_build,
+      resolvedSemver,
+      epochSeconds
+    )
     const merged: BuildInfo = {
-      buildNumber: t.buildNumber || (Number.isFinite(epochMinutesNum) ? formatBuildNumber(epochMinutesNum) : base.buildNumber),
+      buildNumber:
+        t.buildNumber ||
+        (Number.isFinite(epochMinutesNum) ? formatBuildNumber(epochMinutesNum) : base.buildNumber),
       epochMinutes: effectiveMinutes,
       semver: resolvedSemver,
       gitSha: t.gitSha || base.gitSha,
@@ -78,9 +104,10 @@ export async function fetchBuildInfo(): Promise<BuildInfo> {
   }
 }
 
-function computeVersionBuild(semver: string, epochSeconds: number): string {
+function computeVersionBuild(semver: string, epochSeconds?: number): string {
   const { major, minor } = extractMajorMinor(semver)
-  const bucket = Math.floor(Math.max(epochSeconds, 0) / 100) % 10000
+  const baseSeconds = Number.isFinite(epochSeconds) ? (epochSeconds as number) : Math.floor(Date.now() / 1000)
+  const bucket = Math.floor(Math.max(baseSeconds, 0) / 100) % 10000
   const minorPadded = String(minor).padStart(2, '0')
   const bucketPadded = String(bucket).padStart(4, '0')
   return `v${major}.${minorPadded}${bucketPadded}`

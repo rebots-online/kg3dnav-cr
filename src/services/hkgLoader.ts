@@ -109,6 +109,118 @@ function coerceDescription(observations: unknown, fallback: string): string {
   return fallback
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function normalizeEntities(input: unknown): Entity[] {
+  if (!Array.isArray(input)) return []
+  return input
+    .map((item) => {
+      if (!isPlainObject(item)) return null
+      const record = item as Record<string, unknown>
+      const nameRaw = record.name ?? record.title
+      const name = typeof nameRaw === 'string' ? nameRaw : null
+      if (!name) return null
+      const typeSource = record.type ?? record.entityType
+      const type = normalizeEntityType(typeSource)
+      const description =
+        typeof record.description === 'string' && record.description.trim().length > 0
+          ? record.description
+          : coerceDescription(record.observations, name)
+
+      const entity: Entity = {
+        name,
+        type,
+      }
+
+      if (description) entity.description = description
+      if (typeof record.uuid === 'string') entity.uuid = record.uuid
+      if (isPlainObject(record.spatial_media)) {
+        entity.spatial_media = record.spatial_media as Entity['spatial_media']
+      }
+      const relevance = record.searchRelevance
+      if (
+        relevance === 'uuid_coordinated' ||
+        relevance === 'vector_semantic' ||
+        relevance === 'audit_activity' ||
+        relevance === 'text_search'
+      ) {
+        entity.searchRelevance = relevance
+      }
+      if (typeof record.vectorMatch === 'boolean') entity.vectorMatch = record.vectorMatch
+      if (typeof record.auditMatch === 'boolean') entity.auditMatch = record.auditMatch
+
+      return entity
+    })
+    .filter((entity): entity is Entity => Boolean(entity))
+}
+
+function normalizeRelationships(input: unknown): Relationship[] {
+  if (!Array.isArray(input)) return []
+  return input
+    .map((item) => {
+      if (!isPlainObject(item)) return null
+      const record = item as Record<string, unknown>
+      const source =
+        typeof record.source === 'string'
+          ? record.source
+          : typeof record.from === 'string'
+            ? record.from
+            : null
+      const target =
+        typeof record.target === 'string' ? record.target : typeof record.to === 'string' ? record.to : null
+      if (!source || !target) return null
+      const relType =
+        typeof record.relationship === 'string'
+          ? record.relationship
+          : typeof record.relationType === 'string'
+            ? record.relationType
+            : 'RELATED_TO'
+      const relationship: Relationship = {
+        source,
+        target,
+        relationship: relType,
+      }
+      if (typeof record.uuid === 'string') relationship.uuid = record.uuid
+      return relationship
+    })
+    .filter((rel): rel is Relationship => Boolean(rel))
+}
+
+function mergeMetadata(base: KnowledgeGraphMetadata, incoming: unknown): KnowledgeGraphMetadata {
+  const merged: KnowledgeGraphMetadata = { ...base }
+  if (isPlainObject(incoming)) {
+    for (const [key, value] of Object.entries(incoming)) {
+      if (value !== undefined) {
+        merged[key] = value as unknown
+      }
+    }
+  }
+  return merged
+}
+
+function normalizeKnowledgeGraphResponse(
+  raw: unknown,
+  metaBase: KnowledgeGraphMetadata
+): KnowledgeGraphResult | null {
+  if (!isPlainObject(raw)) return null
+  const kgCandidate = (raw as { knowledge_graph?: unknown }).knowledge_graph
+  if (!isPlainObject(kgCandidate)) return null
+
+  const entities = normalizeEntities((kgCandidate as { entities?: unknown }).entities)
+  const relationships = normalizeRelationships((kgCandidate as { relationships?: unknown }).relationships)
+  const metadata = mergeMetadata(metaBase, (raw as { metadata?: unknown }).metadata)
+  metadata.entity_count = entities.length
+  metadata.relationship_count = relationships.length
+  if (!metadata.timestamp) metadata.timestamp = new Date().toISOString()
+
+  return {
+    knowledge_graph: { entities, relationships },
+    metadata,
+  }
+}
+
 function sanitizeBaseUrl(base?: string | null): string | null {
   if (!base) return null
   const trimmed = base.trim()
@@ -124,8 +236,9 @@ function basicAuthHeader(username?: string, password?: string): string | null {
     // ignore and try Buffer fallback
   }
   try {
-    const maybeBuffer = (globalThis as { Buffer?: { from(value: string, encoding: string): { toString(enc: string): string } } })
-      .Buffer
+    const maybeBuffer = (
+      globalThis as { Buffer?: { from(value: string, encoding: string): { toString(enc: string): string } } }
+    ).Buffer
     if (maybeBuffer) return `Basic ${maybeBuffer.from(value, 'utf-8').toString('base64')}`
   } catch (_) {
     // no-op
@@ -172,47 +285,49 @@ export async function findWorkingMCPServer(): Promise<string | null> {
 }
 
 function mapNeo4jGraph(
-  graphData: RawNeo4jGraph,
+  graphData: unknown,
   options: Neo4jLoadOptions,
   mode: ConnectionMode,
   endpoint: string
 ): KnowledgeGraphResult {
-  const entities: Entity[] = Array.isArray(graphData.entities)
-    ? graphData.entities.map((raw) => {
-        const name = typeof raw.name === 'string' ? raw.name : 'Unknown'
-        return {
-          name,
-          type: normalizeEntityType(raw.entityType),
-          description: coerceDescription(raw.observations, name),
-          uuid: typeof raw.uuid === 'string' ? raw.uuid : undefined,
-        }
-      })
-    : []
+  const baseMetadata: KnowledgeGraphMetadata = {
+    source: 'neo4j',
+    timestamp: new Date().toISOString(),
+    query_params: options,
+    connection_mode: mode,
+    endpoint,
+  }
 
-  const relationships: Relationship[] = Array.isArray(graphData.relationships)
-    ? graphData.relationships
-        .map((raw) => ({
-          source: typeof raw.from === 'string' ? raw.from : '',
-          target: typeof raw.to === 'string' ? raw.to : '',
-          relationship: typeof raw.relationType === 'string' ? raw.relationType : 'RELATED_TO',
-          uuid: typeof raw.uuid === 'string' ? raw.uuid : undefined,
-        }))
-        .filter((rel) => rel.source && rel.target)
-    : []
+  const normalized = normalizeKnowledgeGraphResponse(graphData, baseMetadata)
+  if (normalized) {
+    normalized.metadata.query_params = options
+    normalized.metadata.connection_mode = mode
+    normalized.metadata.endpoint = endpoint
+    normalized.metadata.source = 'neo4j'
+    normalized.metadata.has_more =
+      Boolean(options.limit) && normalized.knowledge_graph.entities.length === (options.limit ?? 0)
+    if (isPlainObject(graphData) && typeof (graphData as { totalCount?: number }).totalCount === 'number') {
+      normalized.metadata.total_available = (graphData as { totalCount: number }).totalCount
+    }
+    if (typeof normalized.metadata.total_available !== 'number') {
+      normalized.metadata.total_available = normalized.metadata.entity_count
+    }
+    return normalized
+  }
+
+  const rawGraph = (graphData ?? {}) as RawNeo4jGraph & { metadata?: KnowledgeGraphMetadata }
+  const entities = normalizeEntities(rawGraph.entities)
+  const relationships = normalizeRelationships(rawGraph.relationships)
+  const metadata = mergeMetadata(baseMetadata, rawGraph.metadata)
+  metadata.entity_count = entities.length
+  metadata.relationship_count = relationships.length
+  metadata.has_more = Boolean(options.limit) && entities.length === (options.limit ?? 0)
+  metadata.total_available = typeof rawGraph.totalCount === 'number' ? rawGraph.totalCount : entities.length
+  if (!metadata.timestamp) metadata.timestamp = new Date().toISOString()
 
   return {
     knowledge_graph: { entities, relationships },
-    metadata: {
-      source: 'neo4j',
-      timestamp: new Date().toISOString(),
-      entity_count: entities.length,
-      relationship_count: relationships.length,
-      query_params: options,
-      has_more: Boolean(options.limit) && entities.length === (options.limit ?? 0),
-      total_available: typeof graphData.totalCount === 'number' ? graphData.totalCount : entities.length,
-      connection_mode: mode,
-      endpoint,
-    },
+    metadata,
   }
 }
 
@@ -303,27 +418,49 @@ export async function loadFromQdrant(
 }
 
 function mapQdrantResults(
-  data: RawQdrantResult[] | undefined,
+  raw: unknown,
   searchQuery: string,
   mode: ConnectionMode,
   endpoint: string
 ): KnowledgeGraphResult {
+  const baseMetadata: KnowledgeGraphMetadata = {
+    source: 'qdrant',
+    search_query: searchQuery,
+    timestamp: new Date().toISOString(),
+    connection_mode: mode,
+    endpoint,
+  }
+
+  const normalized = normalizeKnowledgeGraphResponse(raw, baseMetadata)
+  if (normalized) {
+    normalized.metadata.source = 'qdrant'
+    normalized.metadata.search_query = searchQuery
+    normalized.metadata.connection_mode = mode
+    normalized.metadata.endpoint = endpoint
+    if (!normalized.metadata.timestamp) normalized.metadata.timestamp = new Date().toISOString()
+    return normalized
+  }
+
   const entities: Entity[] = []
   const relationships: Relationship[] = []
 
-  ;(data ?? []).forEach((result) => {
+  const data = Array.isArray(raw) ? (raw as RawQdrantResult[]) : []
+
+  data.forEach((result) => {
     const metadata = result.metadata
     if (metadata) {
       if (Array.isArray(metadata.entities)) {
         entities.push(
-          ...metadata.entities.map((entity) => ({
-            ...entity,
-            vectorMatch: true,
-          }))
+          ...normalizeEntities(
+            metadata.entities.map((entity) => ({
+              ...entity,
+              vectorMatch: true,
+            }))
+          )
         )
       }
       if (Array.isArray(metadata.relationships)) {
-        relationships.push(...metadata.relationships)
+        relationships.push(...normalizeRelationships(metadata.relationships))
       }
       if (typeof metadata.entity_name === 'string') {
         entities.push({
@@ -342,17 +479,13 @@ function mapQdrantResults(
     }
   })
 
+  const metadata = { ...baseMetadata }
+  metadata.entity_count = entities.length
+  metadata.relationship_count = relationships.length
+
   return {
     knowledge_graph: { entities, relationships },
-    metadata: {
-      source: 'qdrant',
-      search_query: searchQuery,
-      timestamp: new Date().toISOString(),
-      entity_count: entities.length,
-      relationship_count: relationships.length,
-      connection_mode: mode,
-      endpoint,
-    },
+    metadata,
   }
 }
 
@@ -399,37 +532,47 @@ export async function loadFromPostgreSQL(): Promise<KnowledgeGraphResult> {
   }
 }
 
-function mapPostgresResults(
-  auditLogs: RawPostgresLog[] | undefined,
-  mode: ConnectionMode,
-  endpoint: string
-): KnowledgeGraphResult {
+function mapPostgresResults(raw: unknown, mode: ConnectionMode, endpoint: string): KnowledgeGraphResult {
+  const baseMetadata: KnowledgeGraphMetadata = {
+    source: 'postgresql',
+    timestamp: new Date().toISOString(),
+    connection_mode: mode,
+    endpoint,
+  }
+
+  const normalized = normalizeKnowledgeGraphResponse(raw, baseMetadata)
+  if (normalized) {
+    normalized.metadata.source = 'postgresql'
+    normalized.metadata.connection_mode = mode
+    normalized.metadata.endpoint = endpoint
+    if (!normalized.metadata.timestamp) normalized.metadata.timestamp = new Date().toISOString()
+    return normalized
+  }
+
   const entities: Entity[] = []
   const relationships: Relationship[] = []
+  const auditLogs = Array.isArray(raw) ? (raw as RawPostgresLog[]) : []
 
-  ;(auditLogs ?? []).forEach((log) => {
+  auditLogs.forEach((log) => {
     const knowledgeGraph = log.metadata?.knowledge_graph
     if (knowledgeGraph) {
       if (Array.isArray(knowledgeGraph.entities)) {
-        entities.push(...knowledgeGraph.entities)
+        entities.push(...normalizeEntities(knowledgeGraph.entities))
       }
       if (Array.isArray(knowledgeGraph.relationships)) {
-        relationships.push(...knowledgeGraph.relationships)
+        relationships.push(...normalizeRelationships(knowledgeGraph.relationships))
       }
     }
   })
 
+  const metadata = { ...baseMetadata }
+  metadata.audit_entries = auditLogs.length
+  metadata.entity_count = entities.length
+  metadata.relationship_count = relationships.length
+
   return {
     knowledge_graph: { entities, relationships },
-    metadata: {
-      source: 'postgresql',
-      audit_entries: Array.isArray(auditLogs) ? auditLogs.length : 0,
-      timestamp: new Date().toISOString(),
-      entity_count: entities.length,
-      relationship_count: relationships.length,
-      connection_mode: mode,
-      endpoint,
-    },
+    metadata,
   }
 }
 
@@ -511,7 +654,7 @@ export async function searchShardedHKG(
     coordinateByUUID?: boolean
     shardTimeout?: number
   } = {}
- ): Promise<KnowledgeGraphResult> {
+): Promise<KnowledgeGraphResult> {
   const {
     maxResultsPerShard = 50,
     preferVectorSearch = true,
@@ -659,18 +802,24 @@ export async function searchShardedHKG(
       })
       if (fb.ok) {
         const fData = (await fb.json()) as RawNeo4jGraph
-        const fallbackEntities: Entity[] = (Array.isArray(fData.entities) ? fData.entities : []).map((raw) => {
-          const name = typeof raw.name === 'string' ? raw.name : 'Unknown'
-          return {
-            uuid: typeof raw.uuid === 'string' ? raw.uuid : undefined,
-            name,
-            type: normalizeEntityType(raw.entityType),
-            description: coerceDescription(raw.observations, name),
-            searchRelevance: 'text_search',
+        const fallbackEntities: Entity[] = (Array.isArray(fData.entities) ? fData.entities : []).map(
+          (raw) => {
+            const name = typeof raw.name === 'string' ? raw.name : 'Unknown'
+            return {
+              uuid: typeof raw.uuid === 'string' ? raw.uuid : undefined,
+              name,
+              type: normalizeEntityType(raw.entityType),
+              description: coerceDescription(raw.observations, name),
+              searchRelevance: 'text_search',
+            }
           }
-        })
-        const known = new Set(coordinatedEntities.map((e) => e.uuid).filter((id): id is string => Boolean(id)))
-        coordinatedEntities.push(...fallbackEntities.filter((entity) => !entity.uuid || !known.has(entity.uuid)))
+        )
+        const known = new Set(
+          coordinatedEntities.map((e) => e.uuid).filter((id): id is string => Boolean(id))
+        )
+        coordinatedEntities.push(
+          ...fallbackEntities.filter((entity) => !entity.uuid || !known.has(entity.uuid))
+        )
       }
     } catch (e) {
       console.warn('Fallback Neo4j search failed:', (e as Error).message)
