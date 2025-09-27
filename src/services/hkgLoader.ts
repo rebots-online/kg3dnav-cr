@@ -9,6 +9,7 @@ import useSettingsStore, {
   MCP_DEFAULT,
   normalizeNeo4jUri,
 } from '../state/settingsStore'
+import { logDebug, logError, logInfo, logWarn } from '../state/logStore'
 
 export type KnowledgeGraphMetadata = {
   source?: string
@@ -303,16 +304,26 @@ export async function findWorkingMCPServer(): Promise<string | null> {
     .filter((url): url is string => !!url)
     .map((url) => url.replace(/\/$/, ''))
   const seen = new Set<string>()
+  logDebug('mcp', 'Searching for MCP server', { candidates })
   for (const url of candidates) {
     if (seen.has(url)) continue
     seen.add(url)
+    logDebug('mcp', 'Checking MCP /health', { url })
     try {
       const r = await tryFetch(`${url}/health`, { method: 'GET' }, 2000)
-      if (r.ok) return url
-    } catch (_) {
-      // continue searching
+      if (r.ok) {
+        logInfo('mcp', 'Found responsive MCP server', { url })
+        return url
+      }
+      logWarn('mcp', 'MCP health check returned non-200', { url, status: r.status })
+    } catch (err) {
+      logWarn('mcp', 'MCP health check failed', {
+        url,
+        error: err instanceof Error ? err.message : String(err),
+      })
     }
   }
+  logWarn('mcp', 'Unable to locate MCP server', { attempted: Array.from(seen.values()) })
   return null
 }
 
@@ -380,13 +391,32 @@ export async function loadFromNeo4j(options: Neo4jLoadOptions = {}): Promise<Kno
       ? serviceConfig.database.trim()
       : 'neo4j'
 
+  const sanitizedOptions = {
+    limit: options.limit ?? null,
+    offset: options.offset ?? null,
+    entityTypes: Array.isArray(options.entityTypes) ? options.entityTypes : null,
+    searchQuery: options.searchQuery ?? null,
+    centerEntity: options.centerEntity ?? null,
+    maxConnections: options.maxConnections ?? null,
+  }
+  logInfo('neo4j', 'Initializing Neo4j graph load', {
+    endpoint: boltEndpoint,
+    database,
+    mode: settings.mode,
+    options: sanitizedOptions,
+  })
+
   let driver: Driver | null = null
   let session: Session | null = null
 
   try {
     driver = createNeo4jDriver(boltEndpoint, username, password)
+    logDebug('neo4j', 'Neo4j driver instantiated', { endpoint: boltEndpoint })
+    logDebug('neo4j', 'Verifying Neo4j connectivity', { endpoint: boltEndpoint })
     await verifyNeo4jConnectivity(driver, boltEndpoint)
+    logInfo('neo4j', 'Neo4j connectivity verified', { endpoint: boltEndpoint })
     session = driver.session({ database })
+    logDebug('neo4j', 'Neo4j session opened', { endpoint: boltEndpoint, database })
 
     const limit =
       typeof options.limit === 'number' && Number.isFinite(options.limit) && options.limit > 0
@@ -490,6 +520,17 @@ export async function loadFromNeo4j(options: Neo4jLoadOptions = {}): Promise<Kno
         ? explicitMaxConnections
         : Math.max(nodeIds.length * 4, 100)
 
+    logDebug('neo4j', 'Resolved Neo4j query parameters', {
+      endpoint: boltEndpoint,
+      limit,
+      offset,
+      entityTypes: normalizedEntityTypes,
+      searchQuery,
+      centerEntity,
+      requestedMaxConnections: options.maxConnections ?? null,
+      appliedMaxConnections: relationshipLimit,
+    })
+
     let relationships: RawNeo4jRelationship[] = []
     if (nodeIds.length > 0) {
       const relationshipResult = await session.run(
@@ -548,19 +589,42 @@ export async function loadFromNeo4j(options: Neo4jLoadOptions = {}): Promise<Kno
       totalCount: entities.length,
     }
 
-    return mapNeo4jGraph(rawGraph, options, settings.mode, boltEndpoint)
+    const result = mapNeo4jGraph(rawGraph, options, settings.mode, boltEndpoint)
+    if (result) {
+      logInfo('neo4j', 'Neo4j load succeeded', {
+        endpoint: boltEndpoint,
+        entities: result.knowledge_graph.entities.length,
+        relationships: result.knowledge_graph.relationships.length,
+        mode: settings.mode,
+      })
+    } else {
+      logWarn('neo4j', 'Neo4j load returned empty result', { endpoint: boltEndpoint })
+    }
+    return result
   } catch (error) {
+    logError('neo4j', 'Neo4j load failed', {
+      endpoint: boltEndpoint,
+      error: error instanceof Error ? error.message : String(error),
+    })
     console.error(`Failed to load from Neo4j via ${boltEndpoint}:`, error)
     return null
   } finally {
     try {
       await session?.close()
     } catch (closeError) {
+      logWarn('neo4j', 'Failed closing Neo4j session', {
+        endpoint: boltEndpoint,
+        error: closeError instanceof Error ? closeError.message : String(closeError),
+      })
       console.warn('Failed closing Neo4j session:', closeError)
     }
     try {
       await driver?.close()
     } catch (closeError) {
+      logWarn('neo4j', 'Failed closing Neo4j driver', {
+        endpoint: boltEndpoint,
+        error: closeError instanceof Error ? closeError.message : String(closeError),
+      })
       console.warn('Failed closing Neo4j driver:', closeError)
     }
   }
@@ -575,9 +639,16 @@ export async function loadFromQdrant(
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   if (serviceConfig.apiKey) headers['api-key'] = serviceConfig.apiKey
 
+  logInfo('qdrant', 'Loading Qdrant knowledge graph slice', {
+    searchQuery,
+    mode: settings.mode,
+    perServiceEndpoint: perServiceBase ?? null,
+  })
+
   if (perServiceBase) {
     const endpoint = `${perServiceBase}/mcp/qdrant/find`
     try {
+      logDebug('qdrant', 'Issuing per-service Qdrant request', { endpoint, searchQuery })
       const resp = await tryFetch(
         endpoint,
         {
@@ -589,8 +660,20 @@ export async function loadFromQdrant(
       )
       if (!resp.ok) throw new Error(`Qdrant request failed: ${resp.status}`)
       const data = (await resp.json()) as RawQdrantResult[]
-      return mapQdrantResults(data, searchQuery, 'perService', endpoint)
+      const result = mapQdrantResults(data, searchQuery, 'perService', endpoint)
+      if (result) {
+        logInfo('qdrant', 'Qdrant per-service load succeeded', {
+          endpoint,
+          entities: result.knowledge_graph.entities.length,
+          relationships: result.knowledge_graph.relationships.length,
+        })
+      }
+      return result
     } catch (err) {
+      logWarn('qdrant', 'Qdrant per-service fetch failed', {
+        endpoint,
+        error: err instanceof Error ? err.message : String(err),
+      })
       console.warn('Qdrant per-service fetch failed:', err)
     }
   }
@@ -599,6 +682,7 @@ export async function loadFromQdrant(
     const base = await findWorkingMCPServer()
     if (!base) throw new Error('No MCP server available')
     const endpoint = `${base}/mcp/qdrant/find`
+    logDebug('qdrant', 'Issuing MCP Qdrant request', { endpoint, searchQuery })
     const resp = await tryFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -606,8 +690,20 @@ export async function loadFromQdrant(
     })
     if (!resp.ok) throw new Error(`Qdrant request failed: ${resp.status}`)
     const data = (await resp.json()) as RawQdrantResult[]
-    return mapQdrantResults(data, searchQuery, 'unified', endpoint)
+    const result = mapQdrantResults(data, searchQuery, 'unified', endpoint)
+    if (result) {
+      logInfo('qdrant', 'Qdrant unified load succeeded', {
+        endpoint,
+        entities: result.knowledge_graph.entities.length,
+        relationships: result.knowledge_graph.relationships.length,
+      })
+    }
+    return result
   } catch (e) {
+    logError('qdrant', 'Failed to load from Qdrant', {
+      searchQuery,
+      error: e instanceof Error ? e.message : String(e),
+    })
     console.error('Failed to load from Qdrant:', e)
     return null
   }
@@ -698,14 +794,32 @@ export async function loadFromPostgreSQL(): Promise<KnowledgeGraphResult> {
     startDate: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
   })
 
+  logInfo('postgres', 'Loading recent audit trail knowledge graph', {
+    mode: settings.mode,
+    perServiceEndpoint: perServiceBase ?? null,
+  })
+
   if (perServiceBase) {
     const endpoint = `${perServiceBase}/mcp/postgres/query_audit_logs`
     try {
+      logDebug('postgres', 'Issuing per-service Postgres request', { endpoint })
       const resp = await tryFetch(endpoint, { method: 'POST', headers, body }, 8000)
       if (!resp.ok) throw new Error(`PostgreSQL request failed: ${resp.status}`)
       const auditLogs = (await resp.json()) as RawPostgresLog[]
-      return mapPostgresResults(auditLogs, 'perService', endpoint)
+      const result = mapPostgresResults(auditLogs, 'perService', endpoint)
+      if (result) {
+        logInfo('postgres', 'Postgres per-service load succeeded', {
+          endpoint,
+          entities: result.knowledge_graph.entities.length,
+          relationships: result.knowledge_graph.relationships.length,
+        })
+      }
+      return result
     } catch (err) {
+      logWarn('postgres', 'Postgres per-service fetch failed', {
+        endpoint,
+        error: err instanceof Error ? err.message : String(err),
+      })
       console.warn('PostgreSQL per-service fetch failed:', err)
     }
   }
@@ -714,6 +828,7 @@ export async function loadFromPostgreSQL(): Promise<KnowledgeGraphResult> {
     const base = await findWorkingMCPServer()
     if (!base) throw new Error('No MCP server available')
     const endpoint = `${base}/mcp/postgres/query_audit_logs`
+    logDebug('postgres', 'Issuing MCP Postgres request', { endpoint })
     const resp = await tryFetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -721,8 +836,19 @@ export async function loadFromPostgreSQL(): Promise<KnowledgeGraphResult> {
     })
     if (!resp.ok) throw new Error(`PostgreSQL request failed: ${resp.status}`)
     const auditLogs = (await resp.json()) as RawPostgresLog[]
-    return mapPostgresResults(auditLogs, 'unified', endpoint)
+    const result = mapPostgresResults(auditLogs, 'unified', endpoint)
+    if (result) {
+      logInfo('postgres', 'Postgres unified load succeeded', {
+        endpoint,
+        entities: result.knowledge_graph.entities.length,
+        relationships: result.knowledge_graph.relationships.length,
+      })
+    }
+    return result
   } catch (e) {
+    logError('postgres', 'Failed to load from PostgreSQL', {
+      error: e instanceof Error ? e.message : String(e),
+    })
     console.error('Failed to load from PostgreSQL:', e)
     return null
   }
@@ -775,6 +901,7 @@ function mapPostgresResults(raw: unknown, mode: ConnectionMode, endpoint: string
 export async function loadFromHKG(
   dataSource: 'auto' | 'neo4j' | 'qdrant' | 'postgresql' = 'auto'
 ): Promise<KnowledgeGraphResult> {
+  logInfo('hkg', 'Loading knowledge graph via requested source', { dataSource })
   switch (dataSource) {
     case 'neo4j':
       return loadFromNeo4j()
@@ -784,9 +911,25 @@ export async function loadFromHKG(
       return loadFromPostgreSQL()
     case 'auto':
     default: {
+      logDebug('hkg', 'Auto mode attempting Neo4j first', {})
       let r = await loadFromNeo4j({ limit: 500 })
-      if (!r || !r.knowledge_graph.entities.length) r = await loadFromQdrant()
-      if (!r || !r.knowledge_graph.entities.length) r = await loadFromPostgreSQL()
+      if (!r || !r.knowledge_graph.entities.length) {
+        logWarn('hkg', 'Neo4j auto load returned no entities — falling back to Qdrant', {})
+        r = await loadFromQdrant()
+      }
+      if (!r || !r.knowledge_graph.entities.length) {
+        logWarn('hkg', 'Qdrant auto load returned no entities — falling back to PostgreSQL', {})
+        r = await loadFromPostgreSQL()
+      }
+      if (r) {
+        logInfo('hkg', 'Auto mode load completed', {
+          entities: r.knowledge_graph.entities.length,
+          relationships: r.knowledge_graph.relationships.length,
+          source: r.metadata?.source ?? 'unknown',
+        })
+      } else {
+        logError('hkg', 'Auto mode failed to load knowledge graph', {})
+      }
       return r
     }
   }
@@ -859,7 +1002,20 @@ export async function searchShardedHKG(
     shardTimeout = 5000,
   } = options
   const base = await findWorkingMCPServer()
-  if (!base) return null
+  if (!base) {
+    logError('sharded-hkg', 'No MCP server available for sharded search', { searchTopic })
+    return null
+  }
+
+  logInfo('sharded-hkg', 'Executing sharded HKG search', {
+    searchTopic,
+    maxResultsPerShard,
+    preferVectorSearch,
+    includeAuditTrail,
+    coordinateByUUID,
+    shardTimeout,
+    base,
+  })
 
   const vectorUUIDs = new Set<string>()
   const auditUUIDs = new Set<string>()
@@ -868,6 +1024,7 @@ export async function searchShardedHKG(
 
   if (preferVectorSearch) {
     try {
+      logDebug('sharded-hkg', 'Starting Qdrant shard search', { base, searchTopic, maxResultsPerShard })
       const qRes = await Promise.race([
         tryFetch(`${base}/mcp/qdrant/find`, {
           method: 'POST',
@@ -894,14 +1051,27 @@ export async function searchShardedHKG(
         vectorResults.forEach((result) => {
           if (result.uuid) vectorUUIDs.add(result.uuid)
         })
+        logInfo('sharded-hkg', 'Qdrant shard search completed', {
+          base,
+          results: vectorResults.length,
+          uniqueUUIDs: vectorUUIDs.size,
+        })
       }
     } catch (e) {
+      logWarn('sharded-hkg', 'Qdrant vector search failed', {
+        error: e instanceof Error ? e.message : String(e),
+      })
       console.warn('Qdrant vector search failed:', (e as Error).message)
     }
   }
 
   if (includeAuditTrail) {
     try {
+      logDebug('sharded-hkg', 'Starting PostgreSQL audit shard search', {
+        base,
+        searchTopic,
+        maxResultsPerShard,
+      })
       const aRes = await Promise.race([
         tryFetch(`${base}/mcp/postgres/query_audit_logs`, {
           method: 'POST',
@@ -933,8 +1103,16 @@ export async function searchShardedHKG(
         auditResults.forEach((log) => {
           if (log.uuid) auditUUIDs.add(log.uuid)
         })
+        logInfo('sharded-hkg', 'PostgreSQL audit shard search completed', {
+          base,
+          results: auditResults.length,
+          uniqueUUIDs: auditUUIDs.size,
+        })
       }
     } catch (e) {
+      logWarn('sharded-hkg', 'PostgreSQL audit search failed', {
+        error: e instanceof Error ? e.message : String(e),
+      })
       console.warn('PostgreSQL audit search failed:', (e as Error).message)
     }
   }
@@ -946,6 +1124,11 @@ export async function searchShardedHKG(
     const uuids = Array.from(new Set<string>([...vectorUUIDs.values(), ...auditUUIDs.values()]))
     if (uuids.length > 0) {
       try {
+        logDebug('sharded-hkg', 'Coordinating Neo4j entities for shard results', {
+          base,
+          uuids: uuids.length,
+          searchTopic,
+        })
         const nRes = await tryFetch(`${base}/mcp/neo4j/search_nodes`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -982,8 +1165,15 @@ export async function searchShardedHKG(
               uuid: typeof raw.uuid === 'string' ? raw.uuid : undefined,
             }))
             .filter((rel) => rel.source && rel.target)
+          logInfo('sharded-hkg', 'Neo4j coordination completed', {
+            entities: coordinatedEntities.length,
+            relationships: coordinatedRelationships.length,
+          })
         }
       } catch (e) {
+        logWarn('sharded-hkg', 'Neo4j coordination failed', {
+          error: e instanceof Error ? e.message : String(e),
+        })
         console.warn('Neo4j coordination failed:', (e as Error).message)
       }
     }
@@ -991,6 +1181,11 @@ export async function searchShardedHKG(
 
   if (coordinatedEntities.length < 10) {
     try {
+      logDebug('sharded-hkg', 'Executing fallback Neo4j search', {
+        base,
+        searchTopic,
+        maxResultsPerShard,
+      })
       const fb = await tryFetch(`${base}/mcp/neo4j/search_nodes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1016,13 +1211,20 @@ export async function searchShardedHKG(
         coordinatedEntities.push(
           ...fallbackEntities.filter((entity) => !entity.uuid || !known.has(entity.uuid))
         )
+        logInfo('sharded-hkg', 'Fallback Neo4j search added entities', {
+          fallbackEntities: fallbackEntities.length,
+          totalEntities: coordinatedEntities.length,
+        })
       }
     } catch (e) {
+      logWarn('sharded-hkg', 'Fallback Neo4j search failed', {
+        error: e instanceof Error ? e.message : String(e),
+      })
       console.warn('Fallback Neo4j search failed:', (e as Error).message)
     }
   }
 
-  return {
+  const result: KnowledgeGraphResult = {
     knowledge_graph: { entities: coordinatedEntities, relationships: coordinatedRelationships },
     metadata: {
       source: 'sharded_hkg_search',
@@ -1035,6 +1237,13 @@ export async function searchShardedHKG(
       audit_results: auditResults.length,
     },
   }
+  logInfo('sharded-hkg', 'Sharded HKG search completed', {
+    entities: result.knowledge_graph.entities.length,
+    relationships: result.knowledge_graph.relationships.length,
+    vectorResults: vectorResults.length,
+    auditResults: auditResults.length,
+  })
+  return result
 }
 export async function initializeHKG(
   options: {
@@ -1044,12 +1253,29 @@ export async function initializeHKG(
   } = {}
 ): Promise<KnowledgeGraphResult> {
   const { maxInitialNodes = 200, preferredTypes = ['CONCEPT'], source = 'auto' } = options
+  logInfo('hkg', 'Initializing HKG', {
+    maxInitialNodes,
+    preferredTypes,
+    source,
+  })
   let data: KnowledgeGraphResult = null
   if (preferredTypes.length > 0) {
+    logDebug('hkg', 'Attempting preferred type bootstrap', {
+      type: preferredTypes[0],
+      limit: maxInitialNodes,
+    })
     data = await loadByEntityType(preferredTypes[0], maxInitialNodes)
   }
   if (!data || !data.knowledge_graph.entities.length) {
+    logWarn('hkg', 'Preferred type bootstrap empty, falling back to general load', {})
     data = await loadFromHKG(source)
+  }
+  if (data) {
+    logInfo('hkg', 'HKG initialization complete', {
+      entities: data.knowledge_graph.entities.length,
+      relationships: data.knowledge_graph.relationships.length,
+      source: data.metadata?.source ?? 'unknown',
+    })
   }
   return data
 }

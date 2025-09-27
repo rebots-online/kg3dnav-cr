@@ -1,0 +1,30 @@
+# Checklist — LLM Agentic Navigation & Connection Debug Sidebar
+
+- [x] Initialize logging store
+  - [x] Create `src/state/logStore.ts` with Zustand store holding entries, visibility, dock side, and width.
+  - [x] Export hooks `useLogEntries`, `useLogPanelState`, and helper functions `logDebug/logInfo/logWarn/logError`.
+- [x] Build debug sidebar UI
+  - [x] Implement `src/components/ConnectionDebugSidebar.tsx` rendering logs, dock controls, resize handle, auto-scroll toggle, and clear button.
+  - [x] Integrate sidebar visibility toggle button (floating) for quick access.
+- [ ] Instrument services with log output
+  - [x] Update `src/services/hkgLoader.ts` to emit trace logs for MCP discovery, Neo4j/Qdrant/Postgres requests, successes, and failures.
+  - [x] Update `src/services/llmClient.ts` to log outbound requests, responses, and parsing outcomes.
+- [x] Refactor LLM client for agentic pipeline
+  - [x] Update types (`LLMResult`, `NavigationContext`) and introduce `ChatMessageParam`/`LLMAction` definitions.
+  - [x] Modify provider calls to accept chat history array, apply new system prompt, parse structured JSON response (reply + actions).
+  - [x] Ensure fallback handling logs errors and surfaces friendly message.
+- [x] Overhaul `AINavigationChat`
+  - [x] Remove heuristic keyword pipeline; rely solely on LLM conversation.
+  - [x] Maintain chat history for user/assistant roles and build message array for `navigateWithLLM`.
+  - [x] Execute returned `LLMAction`s by mapping to state actions (highlight/setLayout/etc.), logging each execution.
+  - [x] Provide UI affordance to open debug sidebar + maintain provider badges and error fallback state.
+- [x] App shell integration
+  - [x] Render `ConnectionDebugSidebar` within `AppShell`, ensuring z-index above canvas.
+  - [x] Add top-bar toggle button to open/close debug panel.
+- [x] Context snapshot helper
+  - [x] Implement helper to extract entity/relationship counts, highlights, selection state for LLM context.
+  - [x] Use helper in chat when invoking `navigateWithLLM`.
+- [x] Documentation sync
+  - [x] Update architecture or code comments describing new agent schema if necessary (inline docstrings).
+- [ ] Testing
+  - [ ] Run `npm run build` to ensure TypeScript + bundler succeed.
