@@ -114,12 +114,44 @@ const ConnectionSettingsDrawer: React.FC<Props> = ({ isOpen, onClose }) => {
   const [draftLLMProvider, setDraftLLMProvider] = useState<LLMProvider>(llmProvider)
   const [modelOptions, setModelOptions] = useState<
     Record<LLMProvider, { values: string[]; status: 'idle' | 'loading' | 'ready' | 'error'; error?: string }>
-  >({
-    ollama: { values: [], status: 'idle' },
-    openRouter: { values: [], status: 'idle' },
+  >(() => {
+    const initialOllama: string[] = []
+    if (typeof services.ollama?.model === 'string') {
+      initialOllama.push(services.ollama.model)
+    }
+    initialOllama.push('llama3.1')
+
+    const initialOpenRouter: string[] = []
+    if (typeof services.openRouter?.model === 'string') {
+      initialOpenRouter.push(services.openRouter.model)
+    }
+    initialOpenRouter.push('x-ai/grok-4-fast:free')
+
+    return {
+      ollama: { values: mergeModelValues([], initialOllama), status: 'idle' },
+      openRouter: { values: mergeModelValues([], initialOpenRouter), status: 'idle' },
+    }
   })
+  const CUSTOM_MODEL_OPTION = '__custom__'
 
   const serviceKeys = useMemo(() => Object.keys(draftServices) as ServiceKey[], [draftServices])
+
+  const ollamaModelValue = draftServices.ollama?.model ?? ''
+  const openRouterModelValue = draftServices.openRouter?.model ?? ''
+  const ollamaSelectValue =
+    ollamaModelValue && modelOptions.ollama.values.includes(ollamaModelValue)
+      ? ollamaModelValue
+      : ollamaModelValue
+        ? CUSTOM_MODEL_OPTION
+        : ''
+  const openRouterSelectValue =
+    openRouterModelValue && modelOptions.openRouter.values.includes(openRouterModelValue)
+      ? openRouterModelValue
+      : openRouterModelValue
+        ? CUSTOM_MODEL_OPTION
+        : ''
+  const ollamaStatus = modelOptions.ollama.status
+  const openRouterStatus = modelOptions.openRouter.status
 
   useEffect(() => {
     if (!isOpen) return
@@ -133,17 +165,29 @@ const ConnectionSettingsDrawer: React.FC<Props> = ({ isOpen, onClose }) => {
   const syncModels = useCallback(
     async (provider: LLMProvider, baseUrl: string, apiKey?: string) => {
       if (!isOpen || typeof window === 'undefined') return
+      if (provider === 'openRouter' && (!apiKey || !apiKey.trim())) {
+        setModelOptions((prev) => ({
+          ...prev,
+          openRouter: {
+            ...prev.openRouter,
+            status: 'error',
+            error: 'API key required to load OpenRouter models.',
+          },
+        }))
+        return
+      }
       setModelOptions((prev) => ({
         ...prev,
         [provider]: {
           values: prev[provider].values,
           status: 'loading',
+          error: undefined,
         },
       }))
       const controller = new AbortController()
       const timeoutId = window.setTimeout(() => controller.abort(), 7000)
       try {
-        const tagsUrl = resolveTagsUrl(baseUrl)
+        const tagsUrl = resolveTagsUrl(provider, baseUrl)
         const headers: Record<string, string> = { Accept: 'application/json' }
         if (provider === 'openRouter' && apiKey) {
           headers.Authorization = `Bearer ${apiKey}`
@@ -161,17 +205,19 @@ const ConnectionSettingsDrawer: React.FC<Props> = ({ isOpen, onClose }) => {
         setModelOptions((prev) => ({
           ...prev,
           [provider]: {
-            values: models,
+            values: mergeModelValues(prev[provider].values, models),
             status: 'ready',
           },
         }))
       } catch (err) {
+        const message =
+          err instanceof Error ? (err.name === 'AbortError' ? 'Request timed out' : err.message) : String(err)
         setModelOptions((prev) => ({
           ...prev,
           [provider]: {
             values: prev[provider].values,
             status: 'error',
-            error: err instanceof Error ? err.message : String(err),
+            error: message,
           },
         }))
       } finally {
@@ -193,35 +239,27 @@ const ConnectionSettingsDrawer: React.FC<Props> = ({ isOpen, onClose }) => {
       draftServices.openRouter?.baseUrl ?? DEFAULT_SERVICE_ENDPOINTS.openRouter,
       draftServices.openRouter?.apiKey
     )
-  }, [
-    isOpen,
-    draftServices.openRouter?.baseUrl,
-    draftServices.openRouter?.apiKey,
-    syncModels,
-  ])
+  }, [isOpen, draftServices.openRouter?.baseUrl, draftServices.openRouter?.apiKey, syncModels])
 
-  const handleServiceFieldChange = useCallback(
-    (key: ServiceKey, field: string, value: string) => {
-      setDraftServices((prev) => {
-        const current = prev[key] ?? { baseUrl: DEFAULT_SERVICE_ENDPOINTS[key] }
-        let nextValue: string | number | undefined = value
-        if (field === 'dimension') {
-          nextValue = value === '' ? undefined : Number.parseInt(value, 10)
-          if (!Number.isFinite(nextValue as number)) {
-            nextValue = undefined
-          }
+  const handleServiceFieldChange = useCallback((key: ServiceKey, field: string, value: string) => {
+    setDraftServices((prev) => {
+      const current = prev[key] ?? { baseUrl: DEFAULT_SERVICE_ENDPOINTS[key] }
+      let nextValue: string | number | undefined = value
+      if (field === 'dimension') {
+        nextValue = value === '' ? undefined : Number.parseInt(value, 10)
+        if (!Number.isFinite(nextValue as number)) {
+          nextValue = undefined
         }
-        return {
-          ...prev,
-          [key]: {
-            ...current,
-            [field]: nextValue,
-          },
-        }
-      })
-    },
-    []
-  )
+      }
+      return {
+        ...prev,
+        [key]: {
+          ...current,
+          [field]: nextValue,
+        },
+      }
+    })
+  }, [])
 
   const handleSave = useCallback(() => {
     applyDraft({
@@ -429,7 +467,7 @@ const ConnectionSettingsDrawer: React.FC<Props> = ({ isOpen, onClose }) => {
                           const rawValue = config?.[field.key as keyof typeof config]
                           const value =
                             field.key === 'dimension'
-                              ? rawValue ?? ''
+                              ? (rawValue ?? '')
                               : ((rawValue as string | undefined) ?? '')
                           const isApiKey = field.key === 'apiKey' && key === 'openRouter'
                           const inputType = isApiKey && !revealApiKey ? 'password' : type
@@ -514,51 +552,51 @@ const ConnectionSettingsDrawer: React.FC<Props> = ({ isOpen, onClose }) => {
             )}
           </>
         ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.75)' }}>
-                Configure the language models powering the AI Navigator. Ollama is attempted first; if
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.75)' }}>
+              Configure the language models powering the AI Navigator. Ollama is attempted first; if
               unavailable, OpenAI-compatible endpoints will proxy x-ai/grok-4-fast:free.
-              </div>
-              <div
-                style={{
-                  padding: 16,
-                  borderRadius: 12,
-                  border: '1px solid rgba(255,255,255,0.12)',
-                  background: 'rgba(255,255,255,0.04)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 10,
-                }}
-              >
-                <div style={{ fontSize: 12, fontWeight: 600 }}>Active provider</div>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-                  <input
-                    type="radio"
-                    name="llm-provider"
-                    value="ollama"
-                    checked={draftLLMProvider === 'ollama'}
-                    onChange={() => setDraftLLMProvider('ollama')}
-                    style={{ accentColor: '#4ECDC4' }}
-                  />
-                  Ollama (local first)
-                </label>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-                  <input
-                    type="radio"
-                    name="llm-provider"
-                    value="openRouter"
-                    checked={draftLLMProvider === 'openRouter'}
-                    onChange={() => setDraftLLMProvider('openRouter')}
-                    style={{ accentColor: '#4ECDC4' }}
-                  />
-                  OpenAI-compatible (OpenRouter)
-                </label>
-              </div>
-              <div
-                style={{
-                  padding: 16,
-                  borderRadius: 12,
-                  border: '1px solid rgba(255,255,255,0.1)',
+            </div>
+            <div
+              style={{
+                padding: 16,
+                borderRadius: 12,
+                border: '1px solid rgba(255,255,255,0.12)',
+                background: 'rgba(255,255,255,0.04)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+              }}
+            >
+              <div style={{ fontSize: 12, fontWeight: 600 }}>Active provider</div>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                <input
+                  type="radio"
+                  name="llm-provider"
+                  value="ollama"
+                  checked={draftLLMProvider === 'ollama'}
+                  onChange={() => setDraftLLMProvider('ollama')}
+                  style={{ accentColor: '#4ECDC4' }}
+                />
+                Ollama (local first)
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                <input
+                  type="radio"
+                  name="llm-provider"
+                  value="openRouter"
+                  checked={draftLLMProvider === 'openRouter'}
+                  onChange={() => setDraftLLMProvider('openRouter')}
+                  style={{ accentColor: '#4ECDC4' }}
+                />
+                OpenAI-compatible (OpenRouter)
+              </label>
+            </div>
+            <div
+              style={{
+                padding: 16,
+                borderRadius: 12,
+                border: '1px solid rgba(255,255,255,0.1)',
                 background: 'rgba(255,255,255,0.03)',
               }}
             >
@@ -598,13 +636,18 @@ const ConnectionSettingsDrawer: React.FC<Props> = ({ isOpen, onClose }) => {
                 Model
               </label>
               <div>
-                <input
-                  type="text"
-                  list="ollama-models"
-                  value={draftServices.ollama.model ?? ''}
-                  onChange={(e) =>
-                    handleServiceFieldChange('ollama', 'model', (e.target as HTMLInputElement).value)
-                  }
+                <select
+                  value={ollamaSelectValue}
+                  onChange={(e) => {
+                    const nextValue = (e.target as HTMLSelectElement).value
+                    if (nextValue === CUSTOM_MODEL_OPTION) {
+                      if (!ollamaModelValue) {
+                        handleServiceFieldChange('ollama', 'model', '')
+                      }
+                      return
+                    }
+                    handleServiceFieldChange('ollama', 'model', nextValue)
+                  }}
                   style={{
                     width: '100%',
                     padding: '10px 12px',
@@ -614,16 +657,45 @@ const ConnectionSettingsDrawer: React.FC<Props> = ({ isOpen, onClose }) => {
                     color: 'white',
                     fontSize: 13,
                   }}
-                />
-                <datalist id="ollama-models">
+                  disabled={ollamaStatus === 'loading'}
+                >
+                  <option value="">Select a model…</option>
                   {modelOptions.ollama.values.map((option) => (
-                    <option key={option} value={option} />
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
                   ))}
-                </datalist>
-                {modelOptions.ollama.status === 'error' && (
+                  <option value={CUSTOM_MODEL_OPTION}>Custom value…</option>
+                </select>
+                {ollamaStatus === 'loading' && (
+                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.55)', marginTop: 4 }}>
+                    Loading model list…
+                  </div>
+                )}
+                {ollamaStatus === 'error' && modelOptions.ollama.error && (
                   <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.55)', marginTop: 4 }}>
                     Unable to load Ollama models: {modelOptions.ollama.error}
                   </div>
+                )}
+                {ollamaSelectValue === CUSTOM_MODEL_OPTION && (
+                  <input
+                    type="text"
+                    value={ollamaModelValue}
+                    onChange={(e) =>
+                      handleServiceFieldChange('ollama', 'model', (e.target as HTMLInputElement).value)
+                    }
+                    placeholder="Enter custom model name"
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid rgba(255,255,255,0.2)',
+                      background: 'rgba(0,0,0,0.35)',
+                      color: 'white',
+                      fontSize: 13,
+                      marginTop: 8,
+                    }}
+                  />
                 )}
               </div>
             </div>
@@ -717,13 +789,18 @@ const ConnectionSettingsDrawer: React.FC<Props> = ({ isOpen, onClose }) => {
                 Model
               </label>
               <div>
-                <input
-                  type="text"
-                  list="openrouter-models"
-                  value={draftServices.openRouter.model ?? ''}
-                  onChange={(e) =>
-                    handleServiceFieldChange('openRouter', 'model', (e.target as HTMLInputElement).value)
-                  }
+                <select
+                  value={openRouterSelectValue}
+                  onChange={(e) => {
+                    const nextValue = (e.target as HTMLSelectElement).value
+                    if (nextValue === CUSTOM_MODEL_OPTION) {
+                      if (!openRouterModelValue) {
+                        handleServiceFieldChange('openRouter', 'model', '')
+                      }
+                      return
+                    }
+                    handleServiceFieldChange('openRouter', 'model', nextValue)
+                  }}
                   style={{
                     width: '100%',
                     padding: '10px 12px',
@@ -733,16 +810,45 @@ const ConnectionSettingsDrawer: React.FC<Props> = ({ isOpen, onClose }) => {
                     color: 'white',
                     fontSize: 13,
                   }}
-                />
-                <datalist id="openrouter-models">
+                  disabled={openRouterStatus === 'loading'}
+                >
+                  <option value="">Select a model…</option>
                   {modelOptions.openRouter.values.map((option) => (
-                    <option key={option} value={option} />
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
                   ))}
-                </datalist>
-                {modelOptions.openRouter.status === 'error' && (
+                  <option value={CUSTOM_MODEL_OPTION}>Custom value…</option>
+                </select>
+                {openRouterStatus === 'loading' && (
+                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.55)', marginTop: 4 }}>
+                    Loading model list…
+                  </div>
+                )}
+                {openRouterStatus === 'error' && modelOptions.openRouter.error && (
                   <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.55)', marginTop: 4 }}>
                     Unable to load OpenRouter models: {modelOptions.openRouter.error}
                   </div>
+                )}
+                {openRouterSelectValue === CUSTOM_MODEL_OPTION && (
+                  <input
+                    type="text"
+                    value={openRouterModelValue}
+                    onChange={(e) =>
+                      handleServiceFieldChange('openRouter', 'model', (e.target as HTMLInputElement).value)
+                    }
+                    placeholder="Enter custom model identifier"
+                    style={{
+                      width: '100%',
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      border: '1px solid rgba(255,255,255,0.2)',
+                      background: 'rgba(0,0,0,0.35)',
+                      color: 'white',
+                      fontSize: 13,
+                      marginTop: 8,
+                    }}
+                  />
                 )}
               </div>
             </div>
@@ -818,19 +924,48 @@ function structuredCloneSafe<T>(value: T): T {
   return JSON.parse(JSON.stringify(value))
 }
 
-function resolveTagsUrl(baseUrl: string | undefined): string {
-  if (!baseUrl) {
-    return `${DEFAULT_SERVICE_ENDPOINTS.ollama.replace(/\/$/, '')}/api/tags`
+function resolveTagsUrl(provider: LLMProvider, baseUrl: string | undefined): string {
+  if (provider === 'ollama') {
+    const fallback = `${DEFAULT_SERVICE_ENDPOINTS.ollama.replace(/\/$/, '')}/api/tags`
+    if (!baseUrl) return fallback
+    const normalized = typeof baseUrl === 'string' ? baseUrl.trim() : ''
+    if (!normalized) return fallback
+    const ensureHttp = (value: string) =>
+      /^https?:\/\//i.test(value) ? value : `http://${value.replace(/^\/+/, '')}`
+    try {
+      const url = new URL(ensureHttp(normalized))
+      url.pathname = '/api/tags'
+      url.search = ''
+      url.hash = ''
+      return url.toString()
+    } catch (_err) {
+      const trimmed = ensureHttp(normalized).replace(/\/$/, '')
+      return `${trimmed}/api/tags`
+    }
+  }
+
+  const fallback = DEFAULT_SERVICE_ENDPOINTS.openRouter.replace(/\/chat\/completions$/i, '/models')
+  if (!baseUrl) return fallback
+  let normalized = baseUrl.trim()
+  if (!normalized) return fallback
+  if (!/^https?:\/\//i.test(normalized)) {
+    normalized = `https://${normalized.replace(/^\/+/, '')}`
   }
   try {
-    const url = new URL(baseUrl)
-    url.pathname = '/api/tags'
+    const url = new URL(normalized)
+    url.pathname = '/api/v1/models'
     url.search = ''
     url.hash = ''
     return url.toString()
   } catch (_err) {
-    const trimmed = String(baseUrl).replace(/\/$/, '')
-    return `${trimmed}/api/tags`
+    const trimmed = normalized.replace(/\/$/, '')
+    if (/\/chat\/completions$/i.test(trimmed)) {
+      return trimmed.replace(/\/chat\/completions$/i, '/models')
+    }
+    if (/\/api\/v\d+$/i.test(trimmed)) {
+      return `${trimmed}/models`
+    }
+    return fallback
   }
 }
 
@@ -845,6 +980,8 @@ function extractModelNames(payload: unknown): string[] {
           if (typeof candidate === 'string') return candidate
           const alt = (item as { model?: unknown }).model
           if (typeof alt === 'string') return alt
+          const identifier = (item as { id?: unknown }).id
+          if (typeof identifier === 'string') return identifier
         }
         return null
       })
@@ -858,4 +995,26 @@ function extractModelNames(payload: unknown): string[] {
     }
   }
   return []
+}
+
+function mergeModelValues(existing: string[], incoming: string[]): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const value of existing) {
+    if (typeof value !== 'string') continue
+    const trimmed = value.trim()
+    if (!trimmed || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    result.push(trimmed)
+  }
+  const additions: string[] = []
+  for (const value of incoming) {
+    if (typeof value !== 'string') continue
+    const trimmed = value.trim()
+    if (!trimmed || seen.has(trimmed)) continue
+    seen.add(trimmed)
+    additions.push(trimmed)
+  }
+  additions.sort((a, b) => a.localeCompare(b))
+  return [...result, ...additions]
 }
