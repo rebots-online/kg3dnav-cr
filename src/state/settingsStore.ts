@@ -56,9 +56,40 @@ export const DEFAULT_SERVICE_ENDPOINTS: Record<ServiceKey, string> = {
   openRouter: 'https://openrouter.ai/api/v1/chat/completions',
 }
 
+export function normalizeNeo4jUri(raw: string | undefined): string {
+  const fallback = DEFAULT_SERVICE_ENDPOINTS.neo4j
+  if (typeof raw !== 'string') return fallback
+  let value = raw.trim()
+  if (!value) return fallback
+
+  value = value.replace(/^neo4:\/\//i, 'neo4j://')
+
+  const ensureDoubleSlash = (prefix: string) => `${prefix}//`
+  const schemeMatch = value.match(/^([a-z][a-z0-9+\-.]*):\/\//i)
+  if (!schemeMatch) {
+    const host = value.replace(/^\/+/, '')
+    return `bolt://${host}`.replace(/\/$/, '')
+  }
+
+  const scheme = schemeMatch[1].toLowerCase()
+  if (scheme === 'bolt') {
+    return value.replace(/^bolt:\/?\/?/i, ensureDoubleSlash('bolt:')).replace(/\/$/, '')
+  }
+  if (scheme === 'neo4j' || scheme === 'neo4j+s' || scheme === 'neo4j+ssc') {
+    const canonical = ensureDoubleSlash(`${scheme}:`)
+    return value.replace(/^neo4j\+?s?s?c?:\/?\/?/i, canonical).replace(/\/$/, '')
+  }
+  if (scheme === 'http' || scheme === 'https') {
+    const host = value.replace(/^https?:\/\//i, '')
+    return `bolt://${host}`.replace(/\/$/, '')
+  }
+
+  return fallback
+}
+
 const DEFAULT_SERVICE_CONFIGS: Record<ServiceKey, EndpointConfig> = {
   neo4j: {
-    baseUrl: DEFAULT_SERVICE_ENDPOINTS.neo4j,
+    baseUrl: normalizeNeo4jUri(DEFAULT_SERVICE_ENDPOINTS.neo4j),
     username: '',
     password: '',
     database: 'neo4j',
@@ -155,7 +186,10 @@ export const useSettingsStore = create<SettingsState>()(
 
           if (Object.prototype.hasOwnProperty.call(patch, 'baseUrl')) {
             const candidate = sanitizeBaseUrl(patch.baseUrl)
-            next.baseUrl = candidate ?? defaults.baseUrl
+            next.baseUrl =
+              key === 'neo4j'
+                ? normalizeNeo4jUri(candidate ?? defaults.baseUrl)
+                : (candidate ?? defaults.baseUrl)
           }
 
           if (Object.prototype.hasOwnProperty.call(patch, 'username')) {
@@ -205,7 +239,10 @@ export const useSettingsStore = create<SettingsState>()(
             const merged: EndpointConfig = {
               ...defaults,
               ...provided,
-              baseUrl: sanitizeBaseUrl(provided?.baseUrl) ?? defaults.baseUrl,
+              baseUrl:
+                serviceKey === 'neo4j'
+                  ? normalizeNeo4jUri(sanitizeBaseUrl(provided?.baseUrl) ?? defaults.baseUrl)
+                  : (sanitizeBaseUrl(provided?.baseUrl) ?? defaults.baseUrl),
             }
             if (typeof provided?.username === 'string') {
               merged.username = sanitizeAuthValue(provided.username) ?? ''
@@ -268,7 +305,10 @@ export const useSettingsStore = create<SettingsState>()(
         return {
           ...defaults,
           ...svc,
-          baseUrl: sanitizedBase ?? defaults.baseUrl,
+          baseUrl:
+            key === 'neo4j'
+              ? normalizeNeo4jUri(sanitizedBase ?? defaults.baseUrl)
+              : (sanitizedBase ?? defaults.baseUrl),
         }
       },
     }),

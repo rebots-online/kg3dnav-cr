@@ -7,6 +7,7 @@ import useSettingsStore, {
   DEFAULT_SERVICE_ENDPOINTS,
   getServiceConfigSnapshot,
   MCP_DEFAULT,
+  normalizeNeo4jUri,
 } from '../state/settingsStore'
 
 export type KnowledgeGraphMetadata = {
@@ -258,6 +259,25 @@ function createNeo4jDriver(uri: string, username?: string, password?: string): D
   return neo4j.driver(uri, authToken, { disableLosslessIntegers: true })
 }
 
+async function verifyNeo4jConnectivity(driver: Driver, endpoint: string, timeoutMs = 5000): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      driver.verifyConnectivity(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Timed out verifying connectivity to ${endpoint}`)),
+          timeoutMs
+        )
+      }),
+    ])
+  } finally {
+    if (typeof timer !== 'undefined') {
+      clearTimeout(timer)
+    }
+  }
+}
+
 async function tryFetch(input: RequestInfo, init?: RequestInit, timeoutMs = 5000): Promise<Response> {
   const controller = new AbortController()
   const id = setTimeout(() => controller.abort(), timeoutMs)
@@ -346,7 +366,8 @@ function mapNeo4jGraph(
 export async function loadFromNeo4j(options: Neo4jLoadOptions = {}): Promise<KnowledgeGraphResult> {
   const settings = useSettingsStore.getState()
   const serviceConfig = getServiceConfigSnapshot('neo4j')
-  const boltEndpoint = sanitizeBaseUrl(serviceConfig.baseUrl) ?? DEFAULT_SERVICE_ENDPOINTS.neo4j
+  const rawBolt = sanitizeBaseUrl(serviceConfig.baseUrl) ?? DEFAULT_SERVICE_ENDPOINTS.neo4j
+  const boltEndpoint = normalizeNeo4jUri(rawBolt)
   if (!boltEndpoint) {
     console.error('Neo4j Bolt endpoint is not configured')
     return null
@@ -364,6 +385,7 @@ export async function loadFromNeo4j(options: Neo4jLoadOptions = {}): Promise<Kno
 
   try {
     driver = createNeo4jDriver(boltEndpoint, username, password)
+    await verifyNeo4jConnectivity(driver, boltEndpoint)
     session = driver.session({ database })
 
     const limit =
@@ -528,7 +550,7 @@ export async function loadFromNeo4j(options: Neo4jLoadOptions = {}): Promise<Kno
 
     return mapNeo4jGraph(rawGraph, options, settings.mode, boltEndpoint)
   } catch (error) {
-    console.error('Failed to load from Neo4j via Bolt:', error)
+    console.error(`Failed to load from Neo4j via ${boltEndpoint}:`, error)
     return null
   } finally {
     try {

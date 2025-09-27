@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { useEntities } from '../state/store'
 import { highlightEntities, setTargetEntity, setLayout } from '../state/actions'
 import { navigateWithLLM } from '../services/llmClient'
+import { useServiceMap } from '../state/settingsStore'
 import type { Entity } from '../types/knowledge'
 
 type RankedEntity = Entity & { score: number }
@@ -34,6 +35,15 @@ export default function AINavigationChat({ onOpenSettings }: AINavigationChatPro
   }
 
   const entities = useEntities()
+  const serviceMap = useServiceMap()
+  const ollamaModelLabel =
+    typeof serviceMap.ollama?.model === 'string' && serviceMap.ollama.model.trim().length > 0
+      ? serviceMap.ollama.model.trim()
+      : 'llama3.1'
+  const openRouterModelLabel =
+    typeof serviceMap.openRouter?.model === 'string' && serviceMap.openRouter.model.trim().length > 0
+      ? serviceMap.openRouter.model.trim()
+      : 'x-ai/grok-4-fast:free'
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -239,7 +249,8 @@ ${llmResult.message}`,
         )
       )
     } catch (err) {
-      const fallback = '⚠️ Unable to reach Ollama/OpenRouter. Check your connection settings.'
+      const fallback =
+        '⚠️ Unable to reach Ollama/OpenRouter. Open ⚙️ Settings to verify endpoints and API keys.'
       setMessages((prev) =>
         prev.map((m) =>
           m.id === aiMessageId
@@ -394,11 +405,11 @@ ${fallback}`,
                     textTransform: 'uppercase',
                   }}
                 >
-                  {m.provider === 'ollama' && 'Ollama response'}
-                  {m.provider === 'openrouter' && 'OpenRouter • x-ai/grok-4-fast:free'}
+                  {m.provider === 'ollama' && `Ollama • ${ollamaModelLabel}`}
+                  {m.provider === 'openrouter' && `OpenRouter • ${openRouterModelLabel}`}
                   {m.provider === 'heuristic' && 'Heuristic guidance'}
-                  {m.provider === 'error' && 'LLM unavailable'}
-                  {m.provider === 'fallback' && 'Fallback response'}
+                  {m.provider === 'error' && 'LLM unavailable — check Settings'}
+                  {m.provider === 'fallback' && 'Fallback guidance'}
                 </div>
               )}
               {m.provider === 'error' && onOpenSettings && (
