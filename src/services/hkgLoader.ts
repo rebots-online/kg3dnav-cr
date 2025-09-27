@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
+import neo4j, { type Driver, type Session } from 'neo4j-driver'
 import type { Entity, Relationship } from '../types/knowledge'
 import { getEnvConfig } from '../config/env'
 import useSettingsStore, {
   ConnectionMode,
+  DEFAULT_SERVICE_ENDPOINTS,
   getServiceConfigSnapshot,
   MCP_DEFAULT,
 } from '../state/settingsStore'
@@ -38,6 +40,9 @@ type RawNeo4jEntity = {
   entityType?: string
   observations?: unknown
   uuid?: string
+  description?: string
+  spatial_media?: Entity['spatial_media']
+  elementId?: string
 }
 
 type RawNeo4jRelationship = {
@@ -246,6 +251,13 @@ function basicAuthHeader(username?: string, password?: string): string | null {
   return null
 }
 
+function createNeo4jDriver(uri: string, username?: string, password?: string): Driver {
+  const user = typeof username === 'string' ? username : ''
+  const pass = typeof password === 'string' ? password : ''
+  const authToken = neo4j.auth.basic(user, pass)
+  return neo4j.driver(uri, authToken, { disableLosslessIntegers: true })
+}
+
 async function tryFetch(input: RequestInfo, init?: RequestInit, timeoutMs = 5000): Promise<Response> {
   const controller = new AbortController()
   const id = setTimeout(() => controller.abort(), timeoutMs)
@@ -334,39 +346,201 @@ function mapNeo4jGraph(
 export async function loadFromNeo4j(options: Neo4jLoadOptions = {}): Promise<KnowledgeGraphResult> {
   const settings = useSettingsStore.getState()
   const serviceConfig = getServiceConfigSnapshot('neo4j')
-  const perServiceBase = settings.mode === 'perService' ? sanitizeBaseUrl(serviceConfig.baseUrl) : null
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  const auth = basicAuthHeader(serviceConfig.username, serviceConfig.password)
-  if (auth) headers.Authorization = auth
-  const payload = JSON.stringify(options)
-
-  if (perServiceBase) {
-    const endpoint = `${perServiceBase}/mcp/neo4j/read_graph`
-    try {
-      const resp = await tryFetch(endpoint, { method: 'POST', headers, body: payload }, 8000)
-      if (!resp.ok) throw new Error(`Neo4j request failed: ${resp.status}`)
-      const graphData = await resp.json()
-      return mapNeo4jGraph(graphData, options, 'perService', endpoint)
-    } catch (err) {
-      console.warn('Neo4j per-service fetch failed:', err)
-    }
+  const boltEndpoint = sanitizeBaseUrl(serviceConfig.baseUrl) ?? DEFAULT_SERVICE_ENDPOINTS.neo4j
+  if (!boltEndpoint) {
+    console.error('Neo4j Bolt endpoint is not configured')
+    return null
   }
 
+  const username = typeof serviceConfig.username === 'string' ? serviceConfig.username.trim() : ''
+  const password = typeof serviceConfig.password === 'string' ? serviceConfig.password.trim() : ''
+  const database =
+    typeof serviceConfig.database === 'string' && serviceConfig.database.trim().length > 0
+      ? serviceConfig.database.trim()
+      : 'neo4j'
+
+  let driver: Driver | null = null
+  let session: Session | null = null
+
   try {
-    const base = await findWorkingMCPServer()
-    if (!base) throw new Error('No MCP server available')
-    const endpoint = `${base}/mcp/neo4j/read_graph`
-    const resp = await tryFetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: payload,
+    driver = createNeo4jDriver(boltEndpoint, username, password)
+    session = driver.session({ database })
+
+    const limit =
+      typeof options.limit === 'number' && Number.isFinite(options.limit) && options.limit > 0
+        ? Math.floor(options.limit)
+        : 200
+    const offset =
+      typeof options.offset === 'number' && Number.isFinite(options.offset) && options.offset > 0
+        ? Math.floor(options.offset)
+        : 0
+    const normalizedEntityTypes = Array.isArray(options.entityTypes)
+      ? options.entityTypes
+          .map((type) => (typeof type === 'string' ? type.trim().toUpperCase() : null))
+          .filter((type): type is string => Boolean(type))
+      : []
+    const searchQuery =
+      typeof options.searchQuery === 'string' && options.searchQuery.trim().length > 0
+        ? options.searchQuery.trim()
+        : null
+    const centerEntity =
+      typeof options.centerEntity === 'string' && options.centerEntity.trim().length > 0
+        ? options.centerEntity.trim()
+        : null
+    const explicitMaxConnections =
+      typeof options.maxConnections === 'number' && Number.isFinite(options.maxConnections)
+        ? Math.max(0, Math.floor(options.maxConnections))
+        : null
+
+    const nodeFilters: string[] = []
+    if (normalizedEntityTypes.length > 0) {
+      nodeFilters.push(
+        'ANY(type IN $entityTypes WHERE type = toUpper(COALESCE(n.entityType, head(labels(n)))))'
+      )
+    }
+    if (searchQuery) {
+      nodeFilters.push('toLower(n.name) CONTAINS toLower($searchQuery)')
+    }
+    if (centerEntity) {
+      nodeFilters.push('(n.name = $centerEntity OR EXISTS { MATCH (n)-[*1..2]-(c { name: $centerEntity }) })')
+    }
+    const whereClause = nodeFilters.length > 0 ? `WHERE ${nodeFilters.join(' AND ')}` : ''
+
+    const nodeResult = await session.run(
+      `
+        MATCH (n)
+        ${whereClause}
+        RETURN {
+          elementId: elementId(n),
+          name: COALESCE(n.name, elementId(n)),
+          entityType: toUpper(COALESCE(n.entityType, head(labels(n)))),
+          description: n.description,
+          observations: n.observations,
+          uuid: COALESCE(n.uuid, elementId(n)),
+          spatial_media: n.spatial_media
+        } AS node
+        SKIP $offset
+        LIMIT $limit
+      `,
+      {
+        limit,
+        offset,
+        entityTypes: normalizedEntityTypes.length > 0 ? normalizedEntityTypes : null,
+        searchQuery,
+        centerEntity,
+      }
+    )
+
+    const rawNodes = nodeResult.records
+      .map((record) => record.get('node'))
+      .filter((node): node is Record<string, unknown> => isPlainObject(node))
+
+    const idToName = new Map<string, string>()
+    const entities: RawNeo4jEntity[] = rawNodes.map((node) => {
+      const elementId = typeof node.elementId === 'string' ? node.elementId : undefined
+      const name = typeof node.name === 'string' ? node.name : elementId
+      if (elementId && name) idToName.set(elementId, name)
+      const entityType =
+        typeof node.entityType === 'string' && node.entityType.length > 0 ? node.entityType : undefined
+      const description = typeof node.description === 'string' ? node.description : undefined
+      const uuid = typeof node.uuid === 'string' ? node.uuid : elementId
+      const observations = node.observations
+      const spatialMedia = isPlainObject(node.spatial_media)
+        ? (node.spatial_media as Entity['spatial_media'])
+        : undefined
+      return {
+        name: name ?? 'Unknown',
+        entityType,
+        description,
+        observations,
+        uuid: uuid ?? undefined,
+        spatial_media: spatialMedia,
+        elementId,
+      }
     })
-    if (!resp.ok) throw new Error(`Neo4j request failed: ${resp.status}`)
-    const graphData = await resp.json()
-    return mapNeo4jGraph(graphData, options, 'unified', endpoint)
-  } catch (e) {
-    console.error('Failed to load from Neo4j:', e)
+
+    const nodeIds = entities
+      .map((entity) => entity.elementId)
+      .filter((value): value is string => typeof value === 'string' && value.length > 0)
+
+    const relationshipLimit =
+      explicitMaxConnections !== null && explicitMaxConnections > 0
+        ? explicitMaxConnections
+        : Math.max(nodeIds.length * 4, 100)
+
+    let relationships: RawNeo4jRelationship[] = []
+    if (nodeIds.length > 0) {
+      const relationshipResult = await session.run(
+        `
+          MATCH (n)-[r]-(m)
+          WHERE elementId(n) IN $nodeIds AND elementId(m) IN $nodeIds
+          RETURN {
+            sourceId: elementId(n),
+            targetId: elementId(m),
+            relationType: type(r),
+            uuid: COALESCE(r.uuid, elementId(r)),
+            sourceName: COALESCE(n.name, elementId(n)),
+            targetName: COALESCE(m.name, elementId(m))
+          } AS relationship
+          LIMIT $maxConnections
+        `,
+        { nodeIds, maxConnections: relationshipLimit }
+      )
+
+      relationships = relationshipResult.records
+        .map((record) => record.get('relationship'))
+        .filter((rel): rel is Record<string, unknown> => isPlainObject(rel))
+        .map((rel) => {
+          const sourceId = typeof rel.sourceId === 'string' ? rel.sourceId : undefined
+          const targetId = typeof rel.targetId === 'string' ? rel.targetId : undefined
+          const fromName =
+            typeof rel.sourceName === 'string'
+              ? rel.sourceName
+              : sourceId
+                ? idToName.get(sourceId)
+                : undefined
+          const toName =
+            typeof rel.targetName === 'string'
+              ? rel.targetName
+              : targetId
+                ? idToName.get(targetId)
+                : undefined
+          const relationType =
+            typeof rel.relationType === 'string' && rel.relationType.length > 0
+              ? rel.relationType
+              : 'RELATED_TO'
+          const uuid = typeof rel.uuid === 'string' ? rel.uuid : undefined
+          return {
+            from: fromName,
+            to: toName,
+            relationType,
+            uuid,
+          }
+        })
+        .filter((rel): rel is RawNeo4jRelationship => Boolean(rel.from && rel.to))
+    }
+
+    const rawGraph: RawNeo4jGraph = {
+      entities,
+      relationships,
+      totalCount: entities.length,
+    }
+
+    return mapNeo4jGraph(rawGraph, options, settings.mode, boltEndpoint)
+  } catch (error) {
+    console.error('Failed to load from Neo4j via Bolt:', error)
     return null
+  } finally {
+    try {
+      await session?.close()
+    } catch (closeError) {
+      console.warn('Failed closing Neo4j session:', closeError)
+    }
+    try {
+      await driver?.close()
+    } catch (closeError) {
+      console.warn('Failed closing Neo4j driver:', closeError)
+    }
   }
 }
 

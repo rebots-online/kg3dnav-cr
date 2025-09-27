@@ -49,7 +49,7 @@ type SettingsState = {
 export const MCP_DEFAULT = 'http://192.168.0.71:49160'
 
 export const DEFAULT_SERVICE_ENDPOINTS: Record<ServiceKey, string> = {
-  neo4j: 'http://192.168.0.71:7474',
+  neo4j: 'bolt://192.168.0.71:7687',
   qdrant: 'http://192.168.0.71:6333',
   postgres: 'postgresql://192.168.0.71:5432',
   ollama: 'http://localhost:11434',

@@ -45,7 +45,7 @@ const SERVICE_METADATA: Record<
     label: 'Neo4j',
     description: 'Graph database backing the knowledge graph.',
     fields: [
-      { key: 'baseUrl', label: 'Base URL', placeholder: 'http://192.168.0.71:7474' },
+      { key: 'baseUrl', label: 'Base URL', placeholder: 'bolt://192.168.0.71:7687' },
       { key: 'username', label: 'Username', placeholder: 'neo4j' },
       { key: 'password', label: 'Password', type: 'password', placeholder: '••••••' },
       { key: 'database', label: 'Database', placeholder: 'neo4j' },

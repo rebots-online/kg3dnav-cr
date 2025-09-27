@@ -134,9 +134,6 @@ export default function AppShell(): JSX.Element {
         }}
       >
         <div>{`${formatVersionBuildForDisplay(buildInfo.versionBuild)} • v${buildInfo.semver}`}</div>
-        <div
-          style={{ opacity: 0.8 }}
-        >{`build ${buildInfo.buildNumber} • sha ${buildInfo.gitSha.substring(0, 7)} • minutes ${buildInfo.epochMinutes}`}</div>
       </div>
 
       {showSplash && <SplashScreen buildInfo={buildInfo} />}
