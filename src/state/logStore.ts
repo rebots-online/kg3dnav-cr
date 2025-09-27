@@ -30,6 +30,41 @@ type LogStoreState = {
 
 const MAX_ENTRIES = 500
 
+function emitToConsole(entry: LogEntry) {
+  if (typeof console === 'undefined') return
+  const prefix = `[${entry.level.toUpperCase()}][${entry.source}]`
+  const payload = entry.detail !== undefined ? [entry.message, entry.detail] : [entry.message]
+  switch (entry.level) {
+    case 'debug':
+      console.debug(prefix, ...payload)
+      break
+    case 'info':
+      console.info(prefix, ...payload)
+      break
+    case 'warn':
+      console.warn(prefix, ...payload)
+      break
+    case 'error':
+      console.error(prefix, ...payload)
+      break
+    default:
+      console.log(prefix, ...payload)
+      break
+  }
+}
+
+function emitToVite(entry: LogEntry) {
+  try {
+    if (import.meta.env?.DEV && import.meta.hot) {
+      import.meta.hot.send('hkg:log', entry)
+    }
+  } catch (error) {
+    if (typeof console !== 'undefined') {
+      console.warn('[log-bridge] Failed to forward log entry to Vite dev server', error)
+    }
+  }
+}
+
 function ensureId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
@@ -59,6 +94,8 @@ export const useLogStore = create<LogStoreState>()((set) => ({
         unreadErrorCount,
       }
     })
+    emitToConsole(normalized)
+    emitToVite(normalized)
   },
   clear: () => set({ entries: [], unreadErrorCount: 0 }),
   setVisible: (value) =>
@@ -104,4 +141,6 @@ export const logWarn = (source: string, message: string, detail?: unknown) =>
   appendLog('warn', source, message, detail)
 export const logError = (source: string, message: string, detail?: unknown) =>
   appendLog('error', source, message, detail)
+
+export const bridgeLogToDevServer = emitToVite
 

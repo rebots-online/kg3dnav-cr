@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import neo4j, { type Driver, type Session } from 'neo4j-driver'
+import type { Driver, Session } from 'neo4j-driver'
 import type { Entity, Relationship } from '../types/knowledge'
 import { getEnvConfig } from '../config/env'
 import useSettingsStore, {
@@ -10,6 +10,46 @@ import useSettingsStore, {
   normalizeNeo4jUri,
 } from '../state/settingsStore'
 import { logDebug, logError, logInfo, logWarn } from '../state/logStore'
+
+type Neo4jDriverModule = typeof import('neo4j-driver')
+
+let cachedNeo4jModule: Neo4jDriverModule | null = null
+
+function describeError(error: unknown) {
+  if (error instanceof Error) {
+    const payload: Record<string, unknown> = {
+      message: error.message,
+    }
+    if (typeof (error as { code?: unknown }).code === 'string') {
+      payload.code = (error as { code?: string }).code
+    }
+    if (error.stack) payload.stack = error.stack
+    return payload
+  }
+  return { message: String(error) }
+}
+
+async function loadNeo4jDriver(context: { endpoint: string }): Promise<Neo4jDriverModule | null> {
+  if (cachedNeo4jModule) return cachedNeo4jModule
+  try {
+    logDebug('neo4j', 'Attempting dynamic import of neo4j-driver', {
+      endpoint: context.endpoint,
+    })
+    const specifier = 'neo4j-driver'
+    const mod = await import(/* @vite-ignore */ specifier)
+    cachedNeo4jModule = mod
+    logDebug('neo4j', 'neo4j-driver module loaded', { endpoint: context.endpoint })
+    return mod
+  } catch (error) {
+    const detail = describeError(error)
+    logError('neo4j', 'Failed to load neo4j-driver module', {
+      endpoint: context.endpoint,
+      ...detail,
+      suggestion: 'Ensure desktop build dependencies are installed or use MCP fallback',
+    })
+    return null
+  }
+}
 
 export type KnowledgeGraphMetadata = {
   source?: string
@@ -234,6 +274,43 @@ function sanitizeBaseUrl(base?: string | null): string | null {
   return trimmed ? trimmed.replace(/\/$/, '') : null
 }
 
+function deriveHttpEndpointFromBolt(boltEndpoint: string): string | null {
+  try {
+    const httpCandidate = boltEndpoint.replace(/^bolt(\+s)?/i, 'http$1')
+    const url = new URL(httpCandidate)
+    if (!url.port) {
+      url.port = url.protocol === 'https:' ? '7473' : '7474'
+    } else if (url.port === '7687') {
+      url.port = url.protocol === 'https:' ? '7473' : '7474'
+    }
+    url.pathname = '/'
+    url.search = ''
+    url.hash = ''
+    return url.toString()
+  } catch (_) {
+    return null
+  }
+}
+
+async function attemptNeo4jHttpPing(boltEndpoint: string) {
+  const httpEndpoint = deriveHttpEndpointFromBolt(boltEndpoint)
+  if (!httpEndpoint) return
+  try {
+    logDebug('neo4j', 'Attempting Neo4j HTTP ping', { endpoint: httpEndpoint })
+    const response = await tryFetch(httpEndpoint, { method: 'GET' }, 3000)
+    logInfo('neo4j', 'Neo4j HTTP ping response', {
+      endpoint: httpEndpoint,
+      status: response.status,
+      ok: response.ok,
+    })
+  } catch (error) {
+    logError('neo4j', 'Neo4j HTTP ping failed', {
+      endpoint: httpEndpoint,
+      ...describeError(error),
+    })
+  }
+}
+
 function basicAuthHeader(username?: string, password?: string): string | null {
   if (!username || !password) return null
   const value = `${username}:${password}`
@@ -253,7 +330,15 @@ function basicAuthHeader(username?: string, password?: string): string | null {
   return null
 }
 
-function createNeo4jDriver(uri: string, username?: string, password?: string): Driver {
+async function createNeo4jDriver(
+  uri: string,
+  username: string | undefined,
+  password: string | undefined
+): Promise<Driver> {
+  const neo4j = await loadNeo4jDriver({ endpoint: uri })
+  if (!neo4j) {
+    throw new Error('neo4j-driver module is unavailable in this runtime')
+  }
   const user = typeof username === 'string' ? username : ''
   const pass = typeof password === 'string' ? password : ''
   const authToken = neo4j.auth.basic(user, pass)
@@ -380,7 +465,7 @@ export async function loadFromNeo4j(options: Neo4jLoadOptions = {}): Promise<Kno
   const rawBolt = sanitizeBaseUrl(serviceConfig.baseUrl) ?? DEFAULT_SERVICE_ENDPOINTS.neo4j
   const boltEndpoint = normalizeNeo4jUri(rawBolt)
   if (!boltEndpoint) {
-    console.error('Neo4j Bolt endpoint is not configured')
+    logError('neo4j', 'Neo4j Bolt endpoint is not configured', {})
     return null
   }
 
@@ -410,9 +495,12 @@ export async function loadFromNeo4j(options: Neo4jLoadOptions = {}): Promise<Kno
   let session: Session | null = null
 
   try {
-    driver = createNeo4jDriver(boltEndpoint, username, password)
+    driver = await createNeo4jDriver(boltEndpoint, username, password)
     logDebug('neo4j', 'Neo4j driver instantiated', { endpoint: boltEndpoint })
-    logDebug('neo4j', 'Verifying Neo4j connectivity', { endpoint: boltEndpoint })
+    logInfo('neo4j', 'Verifying Neo4j connectivity', {
+      endpoint: boltEndpoint,
+      username: username || null,
+    })
     await verifyNeo4jConnectivity(driver, boltEndpoint)
     logInfo('neo4j', 'Neo4j connectivity verified', { endpoint: boltEndpoint })
     session = driver.session({ database })
@@ -602,11 +690,13 @@ export async function loadFromNeo4j(options: Neo4jLoadOptions = {}): Promise<Kno
     }
     return result
   } catch (error) {
+    const detail = describeError(error)
     logError('neo4j', 'Neo4j load failed', {
       endpoint: boltEndpoint,
-      error: error instanceof Error ? error.message : String(error),
+      ...detail,
+      suggestion: 'Falling back to MCP /mcp/neo4j/search_nodes',
     })
-    console.error(`Failed to load from Neo4j via ${boltEndpoint}:`, error)
+    await attemptNeo4jHttpPing(boltEndpoint)
     return null
   } finally {
     try {
@@ -614,18 +704,16 @@ export async function loadFromNeo4j(options: Neo4jLoadOptions = {}): Promise<Kno
     } catch (closeError) {
       logWarn('neo4j', 'Failed closing Neo4j session', {
         endpoint: boltEndpoint,
-        error: closeError instanceof Error ? closeError.message : String(closeError),
+        ...describeError(closeError),
       })
-      console.warn('Failed closing Neo4j session:', closeError)
     }
     try {
       await driver?.close()
     } catch (closeError) {
       logWarn('neo4j', 'Failed closing Neo4j driver', {
         endpoint: boltEndpoint,
-        error: closeError instanceof Error ? closeError.message : String(closeError),
+        ...describeError(closeError),
       })
-      console.warn('Failed closing Neo4j driver:', closeError)
     }
   }
 }
