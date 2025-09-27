@@ -1,15 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
-import { getServiceConfigSnapshot } from '../state/settingsStore'
+import useSettingsStore, { getServiceConfigSnapshot, LLMProvider } from '../state/settingsStore'
 
 type NavigationContext = {
   matches: Array<{ name: string; type?: string; description?: string }>
   action?: string
 }
 
-type LLMProvider = 'ollama' | 'openrouter'
-
 export type LLMResult = {
-  provider: LLMProvider | 'fallback'
+  provider: 'ollama' | 'openrouter' | 'fallback'
   message: string
 }
 
@@ -50,7 +48,7 @@ async function callWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promi
 
 async function callOllama(prompt: string, context: NavigationContext): Promise<LLMResult> {
   const config = getServiceConfigSnapshot('ollama')
-  const baseUrl = sanitizeUrl(config.baseUrl, 'http://192.168.0.71:11434')
+  const baseUrl = sanitizeUrl(config.baseUrl, 'http://localhost:11434')
   const model = config.model?.trim() || 'llama3.1'
   const systemPrompt = buildSystemPrompt(context)
   const response = await callWithTimeout(
@@ -81,15 +79,18 @@ async function callOpenRouter(prompt: string, context: NavigationContext): Promi
   const config = getServiceConfigSnapshot('openRouter')
   const apiKey = config.apiKey?.trim()
   if (!apiKey) throw new Error('OpenRouter API key not configured')
-  const baseUrl = sanitizeUrl(config.baseUrl, 'https://openrouter.ai/api/v1')
-  const model = config.model?.trim() || 'openrouter/x-ai/grok-4-fast:free'
+  const baseUrl = sanitizeUrl(config.baseUrl, 'https://openrouter.ai/api/v1/chat/completions')
+  const completionsUrl = resolveCompletionsUrl(baseUrl)
+  const model = config.model?.trim() || 'x-ai/grok-4-fast:free'
   const systemPrompt = buildSystemPrompt(context)
   const response = await callWithTimeout(
-    fetch(`${baseUrl}/chat/completions`, {
+    fetch(completionsUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
+        'X-Title': 'Hybrid Knowledge Graph (Robin L. M. Cheung, MBA) v0.1a',
+        'HTTP-Referer': 'https://hkg.robincheung.com',
       },
       body: JSON.stringify({
         model,
@@ -111,15 +112,31 @@ async function callOpenRouter(prompt: string, context: NavigationContext): Promi
 }
 
 export async function navigateWithLLM(prompt: string, context: NavigationContext): Promise<LLMResult> {
-  try {
-    return await callOllama(prompt, context)
-  } catch (ollamaError) {
-    console.warn('Ollama navigation call failed:', ollamaError)
+  const order = resolveProviderOrder()
+  let lastError: unknown
+  for (const provider of order) {
     try {
+      if (provider === 'ollama') {
+        return await callOllama(prompt, context)
+      }
       return await callOpenRouter(prompt, context)
-    } catch (openRouterError) {
-      console.warn('OpenRouter fallback failed:', openRouterError)
-      throw openRouterError
+    } catch (err) {
+      lastError = err
+      console.warn(`${provider} navigation call failed:`, err)
     }
   }
+  throw lastError ?? new Error('All LLM providers failed')
+}
+
+function resolveProviderOrder(): LLMProvider[] {
+  const preferred = useSettingsStore.getState().llmProvider
+  return preferred === 'openRouter' ? ['openRouter', 'ollama'] : ['ollama', 'openRouter']
+}
+
+function resolveCompletionsUrl(baseUrl: string): string {
+  const normalized = baseUrl.replace(/\/$/, '')
+  if (/\/chat\/completions$/i.test(normalized)) {
+    return normalized
+  }
+  return `${normalized}/chat/completions`
 }

@@ -34,6 +34,7 @@ export type BuildInfo = {
   semver: string
   gitSha: string
   builtAtIso: string
+  versionBuild: string
 }
 
 export type Layout = 'sphere' | 'grid' | 'concept-centric'
