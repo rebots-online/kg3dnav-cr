@@ -5,15 +5,18 @@ import Sidebar from './Sidebar'
 import DataSourcePanel from './DataSourcePanel'
 import AINavigationChat from './AINavigationChat'
 import ConnectionSettingsDrawer from './ConnectionSettingsDrawer'
+import ConnectionDebugSidebar from './ConnectionDebugSidebar'
 import { getBuildInfo, fetchBuildInfo, formatVersionBuildForDisplay } from '../config/buildInfo'
 import AboutModal from './AboutModal'
 import SplashScreen from './SplashScreen'
+import { useLogPanelState } from '../state/logStore'
 
 export default function AppShell(): JSX.Element {
   const [buildInfo, setBuildInfo] = useState(() => getBuildInfo())
   const [aboutOpen, setAboutOpen] = useState(false)
   const [showSplash, setShowSplash] = useState(true)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const { setVisible: openLogs } = useLogPanelState()
 
   useEffect(() => {
     const t = setTimeout(() => setShowSplash(false), 1200)
@@ -80,6 +83,7 @@ export default function AppShell(): JSX.Element {
       <Sidebar />
       <DataSourcePanel onOpenSettings={() => setSettingsOpen(true)} />
       <AINavigationChat onOpenSettings={() => setSettingsOpen(true)} />
+      <ConnectionDebugSidebar />
       <ConnectionSettingsDrawer isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
 
       {/* Header with stats and About */}
@@ -116,6 +120,25 @@ export default function AppShell(): JSX.Element {
           title="Connection & LLM settings"
         >
           ⚙️ Settings
+        </button>
+      </div>
+      <div style={{ position: 'absolute', top: 10, left: 240, display: 'flex' }}>
+        <button
+          onClick={() => openLogs(true)}
+          style={{
+            background: 'rgba(0,0,0,0.7)',
+            color: 'white',
+            border: '1px solid rgba(255,255,255,0.2)',
+            borderRadius: 8,
+            padding: '8px 12px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+          }}
+          title="Open connection debug logs"
+        >
+          🪵 Logs
         </button>
       </div>
 

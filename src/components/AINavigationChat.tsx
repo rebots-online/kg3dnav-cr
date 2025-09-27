@@ -1,25 +1,80 @@
 // SPDX-License-Identifier: Apache-2.0
 import React, { useEffect, useRef, useState } from 'react'
-import { useEntities } from '../state/store'
-import { highlightEntities, setTargetEntity, setLayout } from '../state/actions'
-import { navigateWithLLM } from '../services/llmClient'
+import {
+  analyzeEntity,
+  clearAllHighlights,
+  followRelationship,
+  highlightEntities,
+  sendQuery,
+  setLayout,
+  setTargetEntity,
+} from '../state/actions'
 import { useServiceMap } from '../state/settingsStore'
-import type { Entity } from '../types/knowledge'
-
-type RankedEntity = Entity & { score: number }
+import { navigateWithLLM, type ChatMessageParam, type LLMAction } from '../services/llmClient'
+import { createNavigationContextSnapshot } from '../services/contextSnapshot'
+import { logError, logInfo, logWarn, useLogPanelState } from '../state/logStore'
 
 type ChatMessage = {
   id: string
-  type: 'user' | 'ai'
+  role: 'user' | 'assistant'
   content: string
-  matchedEntities?: RankedEntity[]
-  action?: string
   timestamp: Date
-  provider?: 'heuristic' | 'ollama' | 'openrouter' | 'error' | 'fallback'
+  provider?: 'ollama' | 'openrouter' | 'fallback' | 'error'
+  actions?: LLMAction[]
+  isPending?: boolean
 }
 
 type AINavigationChatProps = {
   onOpenSettings?: () => void
+}
+
+function formatActionSummary(action: LLMAction): string {
+  switch (action.type) {
+    case 'highlightEntities':
+      return `Highlight: ${action.entities.join(', ')}`
+    case 'setTargetEntity':
+      return `Focus on ${action.entity}`
+    case 'setLayout':
+      return `Layout → ${action.layout}`
+    case 'sendQuery':
+      return `Search "${action.query}"`
+    case 'analyzeEntity':
+      return `Analyze ${action.entity}`
+    case 'followRelationship':
+      return `Follow ${action.relationship}: ${action.from} → ${action.to}`
+    case 'clearHighlights':
+      return 'Clear highlights'
+    default:
+      return action.type
+  }
+}
+
+function applyAction(action: LLMAction) {
+  switch (action.type) {
+    case 'highlightEntities':
+      highlightEntities(action.entities)
+      break
+    case 'setTargetEntity':
+      setTargetEntity(action.entity)
+      break
+    case 'setLayout':
+      setLayout(action.layout)
+      break
+    case 'sendQuery':
+      sendQuery(action.query)
+      break
+    case 'analyzeEntity':
+      analyzeEntity(action.entity)
+      break
+    case 'followRelationship':
+      followRelationship(action.relationship, action.from, action.to)
+      break
+    case 'clearHighlights':
+      clearAllHighlights()
+      break
+    default:
+      break
+  }
 }
 
 export default function AINavigationChat({ onOpenSettings }: AINavigationChatProps): JSX.Element {
@@ -30,11 +85,7 @@ export default function AINavigationChat({ onOpenSettings }: AINavigationChatPro
   const messagesEndRef = useRef<HTMLDivElement | null>(null)
   const inputRef = useRef<HTMLInputElement | null>(null)
 
-  function generateId(prefix: string) {
-    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  }
-
-  const entities = useEntities()
+  const { setVisible: setLogVisible } = useLogPanelState()
   const serviceMap = useServiceMap()
   const ollamaModelLabel =
     typeof serviceMap.ollama?.model === 'string' && serviceMap.ollama.model.trim().length > 0
@@ -45,223 +96,116 @@ export default function AINavigationChat({ onOpenSettings }: AINavigationChatPro
       ? serviceMap.openRouter.model.trim()
       : 'x-ai/grok-4-fast:free'
 
+  function generateId(prefix: string) {
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  }
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
   useEffect(() => {
     if (isOpen) inputRef.current?.focus()
   }, [isOpen])
+
   useEffect(() => {
     if (messages.length === 0) {
       setMessages([
         {
           id: generateId('ai'),
-          type: 'ai',
-          content: 'Hello! Ask me to "show me" or "navigate to" concepts, people, places, or events.',
+          role: 'assistant',
+          content:
+            'Hello! I can help you navigate the knowledge graph, surface insights, and trigger graph actions. Ask me anything about the graph.',
           timestamp: new Date(),
-          provider: 'heuristic',
+          provider: 'fallback',
         },
       ])
     }
   }, [])
 
-  type NavigationAnalysis = {
-    content: string
-    matchedEntities: RankedEntity[]
-    action: 'navigate' | 'search' | 'explore' | 'none' | 'error'
-  }
-
-  async function processNavigationRequest(userQuery: string): Promise<NavigationAnalysis> {
-    try {
-      const q = userQuery.toLowerCase()
-      const action = q.match(/\b(fly|navigate|go to|show me)\b/)
-        ? 'navigate'
-        : q.match(/\b(find|search|locate)\b/)
-          ? 'search'
-          : 'explore'
-      const keywords = extractKeywords(q)
-      const matches = findMatchingEntities(keywords)
-      if (matches.length > 0) {
-        const names = matches.map((e) => e.name)
-        highlightEntities(names)
-        if (matches.length === 1) setTargetEntity(matches[0].name)
-        suggestLayout(matches)
-        return { content: responseFor(action, matches, userQuery), matchedEntities: matches, action }
-      }
-      return { content: noMatchResponse(userQuery, keywords), matchedEntities: [], action: 'none' }
-    } catch (e) {
-      console.error('AI nav error:', e)
-      return {
-        content: 'I encountered an issue. Please try rephrasing your request.',
-        matchedEntities: [],
-        action: 'error',
-      }
-    }
-  }
-
-  function extractKeywords(q: string) {
-    const stop = new Set([
-      'the',
-      'to',
-      'and',
-      'or',
-      'but',
-      'in',
-      'on',
-      'at',
-      'by',
-      'for',
-      'with',
-      'from',
-      'fly',
-      'navigate',
-      'go',
-      'show',
-      'me',
-      'find',
-      'search',
-      'locate',
-      'take',
-      'bring',
-    ])
-    return q
-      .replace(/[^\w\s]/g, ' ')
-      .split(/\s+/)
-      .filter((w) => w.length > 2 && !stop.has(w))
-  }
-
-  function findMatchingEntities(keywords: string[]): RankedEntity[] {
-    const matches: RankedEntity[] = []
-    entities.forEach((e) => {
-      let score = 0
-      for (const k of keywords) {
-        if (e.name.toLowerCase().includes(k)) score += 10
-        if (e.description?.toLowerCase().includes(k)) score += 5
-        if (e.type.toLowerCase().includes(k)) score += 3
-      }
-      const hist = [
-        'historical',
-        'ancient',
-        'medieval',
-        'renaissance',
-        'modern',
-        'contemporary',
-        'century',
-        'era',
-        'period',
-        'gutenberg',
-        'printing',
-        'press',
-      ]
-      if (keywords.some((k) => hist.includes(k)) && (e.type === 'EVENT' || /\d{2,4}/.test(e.name)))
-        score += 15
-      const conceptTerms = [
-        'concept',
-        'idea',
-        'theory',
-        'principle',
-        'anthropological',
-        'sociological',
-        'cultural',
-        'social',
-        'primitive',
-        'artifact',
-        'divergence',
-      ]
-      if (keywords.some((k) => conceptTerms.includes(k)) && e.type === 'CONCEPT') score += 12
-      if (score > 0) matches.push({ ...e, score })
-    })
-    return matches.sort((a, b) => b.score - a.score).slice(0, 8)
-  }
-
-  function responseFor(action: string, list: RankedEntity[], original: string) {
-    if (list.length === 1)
-      return `🎯 Navigating to "${list[0].name}" (${list[0].type}). ${list[0].description || ''}`
-    if (list.length <= 3)
-      return `🔍 Found ${list.length} relevant entities: ${list.map((e) => `"${e.name}"`).join(', ')}.`
-    return `📍 Found ${list.length} entities. Top: ${list
-      .slice(0, 3)
-      .map((e) => `"${e.name}"`)
-      .join(', ')} and ${list.length - 3} more.`
-  }
-
-  function noMatchResponse(query: string, keywords: string[]) {
-    const suggestions = [
-      "Try broader terms like 'technology', 'history', 'culture', or 'society'",
-      'Search for specific people, places, or events',
-      "Use phrases like 'concepts related to...' or 'events around...'",
-      'Ask about entity types: PERSON, ORGANIZATION, LOCATION, CONCEPT, EVENT',
-    ]
-    const s = suggestions[Math.floor(Math.random() * suggestions.length)]
-    return `🤔 I couldn't find matches for "${query}". ${s}.`
-  }
-
-  function suggestLayout(matched: RankedEntity[]) {
-    const types = new Set(matched.map((e) => e.type))
-    if (types.has('CONCEPT') && matched.filter((e) => e.type === 'CONCEPT').length >= 2)
-      setLayout('concept-centric')
-    else if (types.size > 2) setLayout('sphere')
-  }
-
   async function send() {
     if (!inputValue.trim() || isProcessing) return
-    const msg = {
+    const trimmed = inputValue.trim()
+    const userMessage: ChatMessage = {
       id: generateId('user'),
-      type: 'user' as const,
-      content: inputValue.trim(),
+      role: 'user',
+      content: trimmed,
       timestamp: new Date(),
     }
-    setMessages((p) => [...p, msg])
+    const history: ChatMessageParam[] = [...messages, userMessage].map((msg) => ({
+      role: msg.role,
+      content: msg.content,
+    }))
+
+    logInfo('ai-chat', 'User message submitted', { content: trimmed })
+    setMessages((prev) => [...prev, userMessage])
     setInputValue('')
     setIsProcessing(true)
-    const res = await processNavigationRequest(msg.content)
-    const aiMessageId = generateId('ai')
-    setMessages((p) => [
-      ...p,
-      {
-        id: aiMessageId,
-        type: 'ai',
-        content: `${res.content}
 
-Fetching guidance from navigation LLM...`,
-        matchedEntities: res.matchedEntities,
-        action: res.action,
+    const pendingId = generateId('ai')
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: pendingId,
+        role: 'assistant',
+        content: 'Consulting navigation agent...',
         timestamp: new Date(),
-        provider: 'heuristic',
+        provider: 'fallback',
+        isPending: true,
       },
     ])
+
     try {
-      const llmResult = await navigateWithLLM(msg.content, {
-        matches: res.matchedEntities || [],
-        action: res.action,
+      const context = createNavigationContextSnapshot()
+      const result = await navigateWithLLM(history, context)
+      logInfo('ai-chat', 'LLM response received', {
+        provider: result.provider,
+        actions: result.actions.map((action) => action.type),
       })
       setMessages((prev) =>
-        prev.map((m) =>
-          m.id === aiMessageId
+        prev.map((msg) =>
+          msg.id === pendingId
             ? {
-                ...m,
-                content: `${res.content}
-
-${llmResult.message}`,
-                provider: llmResult.provider || 'heuristic',
+                ...msg,
+                content: result.message,
+                provider: result.provider,
+                timestamp: new Date(),
+                isPending: false,
+                actions: result.actions,
               }
-            : m
+            : msg
         )
       )
-    } catch (err) {
+      if (result.actions.length > 0) {
+        result.actions.forEach((action) => {
+          try {
+            applyAction(action)
+            logInfo('ai-chat', 'Executed action', { action: action.type })
+          } catch (error) {
+            logWarn('ai-chat', 'Action execution failed', {
+              action: action.type,
+              error: error instanceof Error ? error.message : String(error),
+            })
+          }
+        })
+      }
+    } catch (error) {
+      logError('ai-chat', 'LLM request failed', {
+        error: error instanceof Error ? error.message : String(error),
+      })
       const fallback =
-        '⚠️ Unable to reach Ollama/OpenRouter. Open ⚙️ Settings to verify endpoints and API keys.'
+        '⚠️ Unable to reach navigation LLM. Open ⚙️ Settings to verify endpoints and API keys.'
       setMessages((prev) =>
-        prev.map((m) =>
-          m.id === aiMessageId
+        prev.map((msg) =>
+          msg.id === pendingId
             ? {
-                ...m,
-                content: `${res.content}
-
-${fallback}`,
+                ...msg,
+                content: fallback,
                 provider: 'error',
+                timestamp: new Date(),
+                isPending: false,
               }
-            : m
+            : msg
         )
       )
     } finally {
@@ -327,25 +271,41 @@ ${fallback}`,
           <div>
             <div style={{ color: 'white', fontWeight: 600, fontSize: 16 }}>AI Navigator</div>
             <div style={{ color: 'rgba(255,255,255,0.7)', fontSize: 12 }}>
-              Natural language graph exploration
+              Agentic graph exploration
             </div>
           </div>
         </div>
-        <button
-          onClick={() => setIsOpen(false)}
-          style={{
-            background: 'none',
-            border: 'none',
-            color: 'rgba(255,255,255,0.7)',
-            fontSize: 20,
-            cursor: 'pointer',
-            padding: 5,
-            borderRadius: '50%',
-          }}
-          title="Close"
-        >
-          ×
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button
+            onClick={() => setLogVisible(true)}
+            style={{
+              background: 'rgba(255,255,255,0.08)',
+              border: '1px solid rgba(255,255,255,0.2)',
+              color: 'white',
+              borderRadius: 8,
+              fontSize: 12,
+              padding: '4px 8px',
+              cursor: 'pointer',
+            }}
+          >
+            View logs
+          </button>
+          <button
+            onClick={() => setIsOpen(false)}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: 'rgba(255,255,255,0.7)',
+              fontSize: 20,
+              cursor: 'pointer',
+              padding: 5,
+              borderRadius: '50%',
+            }}
+            title="Close"
+          >
+            ×
+          </button>
+        </div>
       </div>
 
       <div
@@ -356,7 +316,7 @@ ${fallback}`,
             key={m.id}
             style={{
               display: 'flex',
-              flexDirection: m.type === 'user' ? 'row-reverse' : 'row',
+              flexDirection: m.role === 'user' ? 'row-reverse' : 'row',
               gap: 10,
               alignItems: 'flex-start',
             }}
@@ -367,7 +327,7 @@ ${fallback}`,
                 height: 32,
                 borderRadius: '50%',
                 background:
-                  m.type === 'user'
+                  m.role === 'user'
                     ? 'linear-gradient(135deg, #4ECDC4 0%, #44A08D 100%)'
                     : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
                 display: 'flex',
@@ -377,11 +337,11 @@ ${fallback}`,
                 flexShrink: 0,
               }}
             >
-              {m.type === 'user' ? '👤' : '🧭'}
+              {m.role === 'user' ? '👤' : '🧭'}
             </div>
             <div
               style={{
-                background: m.type === 'user' ? 'rgba(78,205,196,0.2)' : 'rgba(255,255,255,0.05)',
+                background: m.role === 'user' ? 'rgba(78,205,196,0.2)' : 'rgba(255,255,255,0.05)',
                 padding: '12px 16px',
                 borderRadius: 12,
                 color: 'white',
@@ -389,13 +349,13 @@ ${fallback}`,
                 lineHeight: 1.4,
                 maxWidth: 280,
                 border:
-                  m.type === 'user' ? '1px solid rgba(78,205,196,0.3)' : '1px solid rgba(255,255,255,0.1)',
+                  m.role === 'user' ? '1px solid rgba(78,205,196,0.3)' : '1px solid rgba(255,255,255,0.1)',
               }}
             >
               {m.content.split('\n').map((line, idx) => (
                 <div key={idx}>{line}</div>
               ))}
-              {m.provider && m.type === 'ai' && (
+              {m.provider && m.role === 'assistant' && (
                 <div
                   style={{
                     marginTop: 6,
@@ -407,9 +367,8 @@ ${fallback}`,
                 >
                   {m.provider === 'ollama' && `Ollama • ${ollamaModelLabel}`}
                   {m.provider === 'openrouter' && `OpenRouter • ${openRouterModelLabel}`}
-                  {m.provider === 'heuristic' && 'Heuristic guidance'}
+                  {m.provider === 'fallback' && 'Navigation agent'}
                   {m.provider === 'error' && 'LLM unavailable — check Settings'}
-                  {m.provider === 'fallback' && 'Fallback guidance'}
                 </div>
               )}
               {m.provider === 'error' && onOpenSettings && (
@@ -429,8 +388,7 @@ ${fallback}`,
                   Open settings
                 </button>
               )}
-
-              {!!m.matchedEntities?.length && (
+              {m.actions && m.actions.length > 0 && (
                 <div
                   style={{
                     marginTop: 8,
@@ -440,12 +398,10 @@ ${fallback}`,
                     fontSize: 12,
                   }}
                 >
-                  <div style={{ fontWeight: 500, marginBottom: 4 }}>
-                    Highlighted: {m.matchedEntities.length} entities
-                  </div>
-                  {m.matchedEntities.slice(0, 3).map((e) => (
-                    <div key={e.name} style={{ color: 'rgba(255,255,255,0.8)' }}>
-                      • {e.name} ({e.type})
+                  <div style={{ fontWeight: 500, marginBottom: 4 }}>Actions executed</div>
+                  {m.actions.map((action, idx) => (
+                    <div key={`${m.id}-action-${idx}`} style={{ color: 'rgba(255,255,255,0.8)' }}>
+                      • {formatActionSummary(action)}
                     </div>
                   ))}
                 </div>
@@ -516,7 +472,7 @@ ${fallback}`,
                 void send()
               }
             }}
-            placeholder="Navigate to concepts about..."
+            placeholder="Ask the agent to explore..."
             disabled={isProcessing}
             style={{
               flex: 1,
@@ -551,8 +507,7 @@ ${fallback}`,
               fontSize: 16,
             }}
           >
-            {' '}
-            {isProcessing ? '⏳' : '🚀'}{' '}
+            {isProcessing ? '⏳' : '🚀'}
           </button>
         </div>
       </div>

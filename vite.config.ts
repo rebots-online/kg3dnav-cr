@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { defineConfig } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import path from 'node:path'
 
@@ -35,8 +35,49 @@ const epochSeconds = minutes * 60
 const packageVersion = process.env.npm_package_version || '0.0.0-dev'
 const versionBuild = computeVersionBuild(packageVersion, Math.floor(Date.now() / 1000))
 
+type IncomingLogEntry = {
+  id: string
+  timestamp: string
+  level: 'debug' | 'info' | 'warn' | 'error'
+  source: string
+  message: string
+  detail?: unknown
+}
+
+function agentLogBridgePlugin(): Plugin {
+  return {
+    name: 'agent-log-bridge',
+    apply: 'serve',
+    configureServer(server) {
+      const logger = server.config.logger
+      server.ws.on('hkg:log', (payload) => {
+        const entry = payload as IncomingLogEntry
+        const color =
+          entry.level === 'error'
+            ? '\x1b[31m'
+            : entry.level === 'warn'
+              ? '\x1b[33m'
+              : entry.level === 'debug'
+                ? '\x1b[36m'
+                : '\x1b[32m'
+        const reset = '\x1b[0m'
+        const prefix = `${color}[HKG ${entry.level.toUpperCase()}][${entry.source}]${reset}`
+        const line = `${prefix} ${entry.message}`
+        const method: 'info' | 'warn' | 'error' =
+          entry.level === 'error' ? 'error' : entry.level === 'warn' ? 'warn' : 'info'
+        const logFn = (logger[method] ?? console.log.bind(console)) as (message: string) => void
+        logFn(line)
+        if (entry.detail !== undefined) {
+          const detailLine = `${color}  detail:${reset} ${JSON.stringify(entry.detail, null, 2)}`
+          logFn(detailLine)
+        }
+      })
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), agentLogBridgePlugin()],
   resolve: {
     alias: {
       react: path.resolve(process.cwd(), 'node_modules/react'),
