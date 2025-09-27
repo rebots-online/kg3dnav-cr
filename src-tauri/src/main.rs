@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::Serialize;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn build_number_from_minutes(minutes_str: &str) -> String {
     if let Ok(minutes) = minutes_str.parse::<u64>() {
@@ -43,6 +44,10 @@ struct BuildInfo {
     semver: String,
     #[serde(rename = "gitSha")]
     git_sha: String,
+    #[serde(rename = "versionBuild")]
+    version_build_camel: String,
+    #[serde(rename = "version_build")]
+    version_build_snake: String,
 }
 
 #[tauri::command]
@@ -54,6 +59,16 @@ fn get_build_info() -> BuildInfo {
     let epoch_seconds = option_env!("BUILD_EPOCH").unwrap_or("0").to_string();
     let semver = env!("CARGO_PKG_VERSION").to_string();
     let git_sha = option_env!("GIT_SHA").unwrap_or("unknown").to_string();
+    let epoch_seconds_value = option_env!("BUILD_EPOCH")
+        .and_then(|s| s.parse::<u64>().ok())
+        .or_else(|| option_env!("BUILD_MINUTES").and_then(|s| s.parse::<u64>().ok()).map(|m| m * 60))
+        .unwrap_or_else(|| {
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0)
+        });
+    let version_build = compute_version_build(&semver, epoch_seconds_value);
 
     BuildInfo {
         build_number,
@@ -61,7 +76,33 @@ fn get_build_info() -> BuildInfo {
         epoch: epoch_seconds,
         semver,
         git_sha,
+        version_build_camel: version_build.clone(),
+        version_build_snake: version_build,
     }
+}
+
+fn compute_version_build(semver: &str, epoch_seconds: u64) -> String {
+    let (major, minor) = extract_major_minor(semver);
+    let bucket = (epoch_seconds / 100) % 10_000;
+    format!(
+        "v{major}.{minor:02}{bucket:04}",
+        major = major,
+        minor = minor,
+        bucket = bucket
+    )
+}
+
+fn extract_major_minor(semver: &str) -> (u64, u64) {
+    let mut parts = semver.split('.');
+    let major = parts
+        .next()
+        .and_then(|p| p.parse::<u64>().ok())
+        .unwrap_or(0);
+    let minor = parts
+        .next()
+        .and_then(|p| p.parse::<u64>().ok())
+        .unwrap_or(0);
+    (major, minor)
 }
 
 fn main() {

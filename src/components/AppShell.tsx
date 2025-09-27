@@ -94,7 +94,7 @@ export default function AppShell(): JSX.Element {
             padding: '8px 12px',
             cursor: 'pointer',
           }}
-          title={`v${buildInfo.semver} • build ${buildInfo.buildNumber} (min ${buildInfo.epochMinutes}) • ${buildInfo.gitSha.substring(0, 7)}`}
+          title={`${buildInfo.versionBuild} • v${buildInfo.semver} • build ${buildInfo.buildNumber} (min ${buildInfo.epochMinutes}) • ${buildInfo.gitSha.substring(0, 7)}`}
         >
           About
         </button>
@@ -133,10 +133,10 @@ export default function AppShell(): JSX.Element {
           border: '1px solid rgba(255,255,255,0.1)',
         }}
       >
-        <div>{`v${buildInfo.semver} • build ${buildInfo.buildNumber}`}</div>
+        <div>{`${buildInfo.versionBuild} • v${buildInfo.semver}`}</div>
         <div
           style={{ opacity: 0.8 }}
-        >{`sha ${buildInfo.gitSha.substring(0, 7)} • minutes ${buildInfo.epochMinutes}`}</div>
+        >{`build ${buildInfo.buildNumber} • sha ${buildInfo.gitSha.substring(0, 7)} • minutes ${buildInfo.epochMinutes}`}</div>
       </div>
 
       {showSplash && <SplashScreen buildInfo={buildInfo} />}

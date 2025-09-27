@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: Apache-2.0
 
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
+
 function computeEpochMinutes() {
   return Math.floor(Date.now() / 60000)
 }
@@ -11,16 +15,48 @@ function formatBuildNumber(minutes) {
   return tail.padStart(5, '0')
 }
 
+function parseMajorMinor(versionString) {
+  const [majorRaw = '0', minorRaw = '0'] = String(versionString ?? '').split('.')
+  const major = Number.parseInt(majorRaw, 10)
+  const minor = Number.parseInt(minorRaw, 10)
+  return {
+    major: Number.isFinite(major) ? major : 0,
+    minor: Number.isFinite(minor) ? minor : 0,
+  }
+}
+
+function computeVersionBuild({ major, minor }, epochSeconds) {
+  const minorPadded = String(minor).padStart(2, '0')
+  const bucket = Math.floor(Math.max(epochSeconds, 0) / 100) % 10000
+  const bucketPadded = String(bucket).padStart(4, '0')
+  return `v${major}.${minorPadded}${bucketPadded}`
+}
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const packageJsonPath = path.resolve(__dirname, '..', 'package.json')
+let packageVersion = '0.0.0'
+try {
+  const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'))
+  packageVersion = packageJson.version ?? packageVersion
+} catch (err) {
+  console.warn('Unable to read package.json for version build computation:', err)
+}
+
 const epochMinutes = computeEpochMinutes()
 const buildNumber = formatBuildNumber(epochMinutes)
 const epochSeconds = epochMinutes * 60
 const builtAtIso = new Date(epochMinutes * 60000).toISOString()
+const { major, minor } = parseMajorMinor(packageVersion)
+const versionBuild = computeVersionBuild({ major, minor }, Math.floor(Date.now() / 1000))
 
 const payload = {
   epochMinutes,
   buildNumber,
   epochSeconds,
   builtAtIso,
+  version: packageVersion,
+  versionBuild,
+  version_build: versionBuild,
 }
 
 const args = process.argv.slice(2)
@@ -30,6 +66,7 @@ const envLines = [
   `BUILD_NUMBER=${buildNumber}`,
   `BUILD_EPOCH=${epochSeconds}`,
   `BUILD_ISO=${builtAtIso}`,
+  `VERSION_BUILD=${versionBuild}`,
 ]
 
 if (printJson) {
