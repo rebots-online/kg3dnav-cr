@@ -1,8 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
 import React from 'react'
 import type { BuildInfo } from '../types/knowledge'
+import { formatVersionBuildForDisplay } from '../config/buildInfo'
 
-export default function AboutModal({ buildInfo, onClose }: { buildInfo: BuildInfo; onClose: () => void }): JSX.Element {
+export default function AboutModal({
+  buildInfo,
+  onClose,
+}: {
+  buildInfo: BuildInfo
+  onClose: () => void
+}): JSX.Element {
   return (
     <div
       role="dialog"
@@ -32,8 +39,10 @@ export default function AboutModal({ buildInfo, onClose }: { buildInfo: BuildInf
       >
         <h2 style={{ marginTop: 0 }}>3D Knowledge Graph Navigator</h2>
         <div>Version: v{buildInfo.semver}</div>
-        <div>Version Build: {buildInfo.versionBuild}</div>
-        <div>Build: {buildInfo.buildNumber} (epoch minutes {buildInfo.epochMinutes})</div>
+        <div>Version Build: {formatVersionBuildForDisplay(buildInfo.versionBuild)}</div>
+        <div>
+          Build: {buildInfo.buildNumber} (epoch minutes {buildInfo.epochMinutes})
+        </div>
         <div>Commit: {buildInfo.gitSha}</div>
         <div>Built: {buildInfo.builtAtIso}</div>
         <div style={{ marginTop: 12, fontSize: 13, color: '#ccc' }}>
@@ -58,4 +67,3 @@ export default function AboutModal({ buildInfo, onClose }: { buildInfo: BuildInf
     </div>
   )
 }
-
