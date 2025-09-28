@@ -1,10 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
+import { QdrantClient as QdrantRestClient } from '@qdrant/js-client-rest'
+import { QdrantClient as QdrantGrpcClientCtor } from '@qdrant/js-client-grpc'
+import type { GrpcClients } from '@qdrant/js-client-grpc/dist/types/api-client.js'
 import type { Driver, Session } from 'neo4j-driver'
 import type { Entity, Relationship } from '../types/knowledge'
 import { getEnvConfig } from '../config/env'
 import useSettingsStore, {
   ConnectionMode,
   DEFAULT_SERVICE_ENDPOINTS,
+  deriveQdrantGrpcAddress,
+  getQdrantConnectionConfig,
   getServiceConfigSnapshot,
   MCP_DEFAULT,
   normalizeNeo4jUri,
@@ -128,6 +133,15 @@ type RawPostgresLog = {
 
 type VectorSearchResult = RawQdrantResult & { uuid?: string }
 type AuditSearchResult = RawPostgresLog & { uuid?: string }
+
+type QdrantGrpcClient = InstanceType<typeof QdrantGrpcClientCtor>
+type QdrantGrpcPointsApi = GrpcClients['points']
+type QdrantGrpcCollectionsApi = GrpcClients['collections']
+type QdrantGrpcQueryRequest = Parameters<QdrantGrpcPointsApi['query']>[0]
+type QdrantGrpcQueryResponse = Awaited<ReturnType<QdrantGrpcPointsApi['query']>>
+type QdrantSearchResult = QdrantGrpcQueryResponse
+type QdrantGrpcScoredPoint = QdrantGrpcQueryResponse['result'][number]
+type QdrantCollectionInfoResponse = Awaited<ReturnType<QdrantGrpcCollectionsApi['get']>>
 
 const ENTITY_TYPE_VALUES: ReadonlyArray<Entity['type']> = [
   'CONCEPT',
@@ -722,79 +736,665 @@ export async function loadFromQdrant(
   searchQuery = 'knowledge graph entities'
 ): Promise<KnowledgeGraphResult> {
   const settings = useSettingsStore.getState()
-  const serviceConfig = getServiceConfigSnapshot('qdrant')
-  const perServiceBase = settings.mode === 'perService' ? sanitizeBaseUrl(serviceConfig.baseUrl) : null
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (serviceConfig.apiKey) headers['api-key'] = serviceConfig.apiKey
+  const { baseUrl, collection, apiKey, embeddingModel: vectorName, dimension } = getQdrantConnectionConfig()
+  if (!apiKey) {
+    logWarn('qdrant', 'No API key configured for direct Qdrant access', {
+      endpoint: baseUrl,
+      collection,
+    })
+  }
+  const trimmedQuery = (searchQuery ?? '').trim()
+  const endpoint = `${baseUrl}/collections/${collection}`
+  const transportInsecure = true
 
   logInfo('qdrant', 'Loading Qdrant knowledge graph slice', {
     searchQuery,
     mode: settings.mode,
-    perServiceEndpoint: perServiceBase ?? null,
+    endpoint: baseUrl,
+    collection,
+    transport: trimmedQuery ? 'grpc' : 'rest',
+    insecure: transportInsecure,
+    vectorName,
+    dimension,
   })
+  // TODO(HKG_SYNC_QDRANT_20250928): Persist direct-connection telemetry back to the hybrid knowledge graph once network access is available.
 
-  if (perServiceBase) {
-    const endpoint = `${perServiceBase}/mcp/qdrant/find`
+  if (trimmedQuery) {
+    const address = deriveQdrantGrpcAddress(baseUrl)
+    let grpcClient: QdrantGrpcClient | null = null
+
     try {
-      logDebug('qdrant', 'Issuing per-service Qdrant request', { endpoint, searchQuery })
-      const resp = await tryFetch(
-        endpoint,
-        {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ query: searchQuery }),
-        },
-        8000
-      )
-      if (!resp.ok) throw new Error(`Qdrant request failed: ${resp.status}`)
-      const data = (await resp.json()) as RawQdrantResult[]
-      const result = mapQdrantResults(data, searchQuery, 'perService', endpoint)
-      if (result) {
-        logInfo('qdrant', 'Qdrant per-service load succeeded', {
+      grpcClient = createQdrantGrpcClient({
+        host: address.host,
+        port: address.port,
+        useTLS: address.useTLS,
+        apiKey,
+      })
+    } catch (error) {
+      logError('qdrant', 'Failed to initialize Qdrant gRPC client', {
+        endpoint: `${address.useTLS ? 'https' : 'http'}://${address.host}:${address.port}`,
+        collection,
+        insecure: transportInsecure,
+        ...describeError(error),
+      })
+    }
+
+    if (grpcClient) {
+      try {
+        const schema = await ensureCollectionVectorParams(grpcClient, collection, vectorName, dimension)
+        if (!schema.ok) {
+          logWarn('qdrant', 'Vector schema mismatch detected for collection', {
+            collection,
+            expectedVector: vectorName,
+            expectedDimension: dimension,
+            actualDimension: schema.dimension ?? null,
+            availableVectors: schema.availableVectors,
+          })
+        }
+
+        const queryRequest = buildGrpcQueryPointsRequest({
+          collection,
+          queryText: trimmedQuery,
+          vectorName,
+          limit: 120,
+        })
+        const response: QdrantSearchResult = await grpcClient.api('points').query(queryRequest)
+        const rawResults = response.result.map(mapGrpcScoredPointToRawResult)
+        const finalResults = mapQdrantResults(rawResults, searchQuery, settings.mode, endpoint)
+
+        if (finalResults) {
+          finalResults.metadata.transport = 'qdrant-grpc'
+          finalResults.metadata.vector_name = vectorName
+          finalResults.metadata.vector_dimension = schema.dimension ?? dimension
+          finalResults.metadata.qdrant_points = response.result.length
+          finalResults.metadata.connection_path = 'qdrant-grpc'
+          finalResults.metadata.qdrant_endpoint = baseUrl
+          finalResults.metadata.qdrant_collection = collection
+          finalResults.metadata.transport_insecure = transportInsecure
+          finalResults.metadata.transport_host = address.host
+          finalResults.metadata.transport_port = address.port
+          logInfo('qdrant', 'Qdrant gRPC vector query succeeded', {
+            endpoint,
+            collection,
+            entities: finalResults.knowledge_graph.entities.length,
+            relationships: finalResults.knowledge_graph.relationships.length,
+            totalPoints: response.result.length,
+            insecure: transportInsecure,
+            transportHost: address.host,
+            transportPort: address.port,
+          })
+          return finalResults
+        }
+
+        logWarn('qdrant', 'Qdrant gRPC query returned no mappable results', {
           endpoint,
-          entities: result.knowledge_graph.entities.length,
-          relationships: result.knowledge_graph.relationships.length,
+          collection,
+          totalPoints: response.result.length,
+          insecure: transportInsecure,
+          transportHost: address.host,
+          transportPort: address.port,
+        })
+      } catch (error) {
+        logError('qdrant', 'Failed to query Qdrant via gRPC', {
+          endpoint,
+          collection,
+          insecure: transportInsecure,
+          transportHost: address.host,
+          transportPort: address.port,
+          ...describeError(error),
         })
       }
-      return result
-    } catch (err) {
-      logWarn('qdrant', 'Qdrant per-service fetch failed', {
+    } else {
+      logWarn('qdrant', 'Skipping gRPC vector search due to missing client', {
         endpoint,
-        error: err instanceof Error ? err.message : String(err),
+        collection,
       })
-      console.warn('Qdrant per-service fetch failed:', err)
     }
+  } else {
+    logWarn('qdrant', 'Empty search query supplied; using REST fallback', {
+      collection,
+      endpoint,
+    })
+  }
+
+  const connectionPath = trimmedQuery ? 'qdrant-grpc-fallback-rest' : 'qdrant-rest'
+
+  return loadFromQdrantViaRest({
+    baseUrl,
+    collection,
+    apiKey,
+    searchQuery,
+    mode: settings.mode,
+    vectorName,
+    vectorDimension: dimension,
+    connectionPath,
+    transportInsecure,
+  })
+}
+
+type QdrantRestFallbackParams = {
+  baseUrl: string
+  collection: string
+  apiKey?: string
+  searchQuery: string
+  mode: ConnectionMode
+  vectorName: string
+  vectorDimension: number
+  connectionPath: string
+  transportInsecure: boolean
+}
+
+async function loadFromQdrantViaRest({
+  baseUrl,
+  collection,
+  apiKey,
+  searchQuery,
+  mode,
+  vectorName,
+  vectorDimension,
+  connectionPath,
+  transportInsecure,
+}: QdrantRestFallbackParams): Promise<KnowledgeGraphResult> {
+  let client: QdrantRestClient
+  try {
+    client = createQdrantRestClientInstance({ baseUrl, apiKey })
+  } catch (error) {
+    logError('qdrant', 'Failed to initialize Qdrant REST client', {
+      endpoint: baseUrl,
+      collection,
+      ...describeError(error),
+    })
+    return null
   }
 
   try {
-    const base = await findWorkingMCPServer()
-    if (!base) throw new Error('No MCP server available')
-    const endpoint = `${base}/mcp/qdrant/find`
-    logDebug('qdrant', 'Issuing MCP Qdrant request', { endpoint, searchQuery })
-    const resp = await tryFetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: searchQuery }),
-    })
-    if (!resp.ok) throw new Error(`Qdrant request failed: ${resp.status}`)
-    const data = (await resp.json()) as RawQdrantResult[]
-    const result = mapQdrantResults(data, searchQuery, 'unified', endpoint)
-    if (result) {
-      logInfo('qdrant', 'Qdrant unified load succeeded', {
-        endpoint,
-        entities: result.knowledge_graph.entities.length,
-        relationships: result.knowledge_graph.relationships.length,
+    if (!apiKey) {
+      logWarn('qdrant', 'Issuing unauthenticated Qdrant REST request', {
+        endpoint: baseUrl,
+        collection,
       })
     }
-    return result
-  } catch (e) {
-    logError('qdrant', 'Failed to load from Qdrant', {
-      searchQuery,
-      error: e instanceof Error ? e.message : String(e),
+    const scrollResult = await client.scroll(collection, {
+      limit: 200,
+      with_payload: true,
+      with_vector: false,
     })
-    console.error('Failed to load from Qdrant:', e)
+
+    const rawResults = scrollResult.points.map(mapScrollPointToRawResult)
+    const shouldFilter = shouldApplyQueryFilter(searchQuery)
+    const filteredResults = shouldFilter
+      ? rawResults.filter((result) => rawResultMatchesQuery(result, searchQuery))
+      : rawResults
+    const endpoint = `${baseUrl}/collections/${collection}`
+    const finalResults = mapQdrantResults(filteredResults, searchQuery, mode, endpoint)
+
+    if (finalResults) {
+      finalResults.metadata.transport =
+        connectionPath === 'qdrant-rest' ? 'qdrant-rest' : 'qdrant-rest-fallback'
+      finalResults.metadata.vector_name = vectorName
+      finalResults.metadata.vector_dimension = vectorDimension
+      finalResults.metadata.qdrant_points = scrollResult.points.length
+      finalResults.metadata.connection_path = connectionPath
+      finalResults.metadata.qdrant_endpoint = baseUrl
+      finalResults.metadata.qdrant_collection = collection
+      finalResults.metadata.transport_insecure = transportInsecure
+      const restLogMessage =
+        connectionPath === 'qdrant-rest' ? 'Qdrant REST load succeeded' : 'Qdrant REST fallback succeeded'
+      logInfo('qdrant', restLogMessage, {
+        endpoint,
+        collection,
+        entities: finalResults.knowledge_graph.entities.length,
+        relationships: finalResults.knowledge_graph.relationships.length,
+        filtered: shouldFilter,
+        totalPoints: scrollResult.points.length,
+        insecure: transportInsecure,
+      })
+    } else {
+      const restWarnMessage =
+        connectionPath === 'qdrant-rest'
+          ? 'Qdrant REST query returned no mappable results'
+          : 'Qdrant REST fallback returned no mappable results'
+      logWarn('qdrant', restWarnMessage, {
+        endpoint,
+        collection,
+        totalPoints: scrollResult.points.length,
+        filtered: shouldFilter,
+        insecure: transportInsecure,
+      })
+    }
+
+    return finalResults
+  } catch (error) {
+    logError('qdrant', 'Failed to load from Qdrant via REST', {
+      searchQuery,
+      endpoint: baseUrl,
+      collection,
+      insecure: transportInsecure,
+      ...describeError(error),
+    })
+    console.error('Failed to load from Qdrant:', error)
     return null
   }
+}
+
+type DirectQdrantSearchParams = {
+  baseUrl: string
+  apiKey?: string
+  collection: string
+  query: string
+  limit: number
+  vectorName: string
+  timeoutMs?: number
+}
+
+type QdrantHttpQueryResponse = {
+  result?: unknown
+}
+
+type QdrantHttpScoredPoint = {
+  id?: unknown
+  payload?: unknown
+  score?: number
+}
+
+async function performDirectQdrantSearch({
+  baseUrl,
+  apiKey,
+  collection,
+  query,
+  limit,
+  vectorName,
+  timeoutMs = 5000,
+}: DirectQdrantSearchParams): Promise<VectorSearchResult[]> {
+  if (!query.trim()) return []
+
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : undefined
+  const timeoutHandle =
+    controller && timeoutMs > 0
+      ? setTimeout(() => {
+          controller.abort()
+        }, timeoutMs)
+      : undefined
+
+  try {
+    const url = `${baseUrl}/collections/${collection}/points/query`
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+    if (apiKey) headers['api-key'] = apiKey
+
+    const body = {
+      using: vectorName,
+      limit,
+      with_payload: true,
+      with_vector: false,
+      query: {
+        nearest: {
+          vector: {
+            document: {
+              text: query,
+              model: vectorName,
+              options: {},
+            },
+          },
+        },
+      },
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: controller?.signal,
+    })
+
+    if (!response.ok) {
+      throw new Error(`Qdrant HTTP query failed with status ${response.status}`)
+    }
+
+    const payload = (await response.json()) as QdrantHttpQueryResponse
+    const points = extractHttpScoredPoints(payload)
+
+    return points
+      .map((point) => mapHttpScoredPointToRawResult(point))
+      .map<VectorSearchResult>((entry) => ({
+        ...entry,
+        uuid:
+          typeof entry.metadata?.uuid === 'string'
+            ? entry.metadata.uuid
+            : typeof entry.id === 'string'
+              ? entry.id
+              : undefined,
+      }))
+      .filter((result): result is VectorSearchResult => typeof result.uuid === 'string')
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle)
+  }
+}
+
+function extractHttpScoredPoints(response: QdrantHttpQueryResponse): QdrantHttpScoredPoint[] {
+  const result = response?.result
+  if (Array.isArray(result)) {
+    return result as QdrantHttpScoredPoint[]
+  }
+  if (isPlainObject(result) && Array.isArray((result as { points?: unknown }).points)) {
+    return ((result as { points?: unknown[] }).points ?? []) as QdrantHttpScoredPoint[]
+  }
+  return []
+}
+
+function createQdrantGrpcClient(config: {
+  host: string
+  port: number
+  useTLS: boolean
+  apiKey?: string | null
+}): QdrantGrpcClient {
+  return new QdrantGrpcClientCtor({
+    host: config.host,
+    port: config.port,
+    https: config.useTLS,
+    apiKey: config.apiKey ?? undefined,
+    timeout: 30000,
+    checkCompatibility: false,
+  })
+}
+
+type QdrantVectorSchemaCheck = {
+  ok: boolean
+  dimension?: number
+  availableVectors: string[]
+}
+
+async function ensureCollectionVectorParams(
+  client: QdrantGrpcClient,
+  collection: string,
+  vectorName: string,
+  expectedDimension: number
+): Promise<QdrantVectorSchemaCheck> {
+  try {
+    const response: QdrantCollectionInfoResponse = await client.api('collections').get({
+      collectionName: collection,
+    })
+    const vectorsConfig = response.result?.config?.params?.vectorsConfig
+    const availableVectors: string[] = []
+    let dimension: number | undefined
+
+    if (vectorsConfig?.config?.case === 'params') {
+      availableVectors.push(vectorName)
+      const size = vectorsConfig.config.value.size
+      if (typeof size === 'bigint') {
+        const numeric = Number(size)
+        dimension = Number.isSafeInteger(numeric) ? numeric : undefined
+      }
+    } else if (vectorsConfig?.config?.case === 'paramsMap') {
+      const map = vectorsConfig.config.value.map ?? {}
+      for (const key of Object.keys(map)) availableVectors.push(key)
+      const entry = map[vectorName]
+      if (entry && typeof entry.size === 'bigint') {
+        const numeric = Number(entry.size)
+        dimension = Number.isSafeInteger(numeric) ? numeric : undefined
+      }
+    }
+
+    const ok = typeof dimension === 'number' && dimension === expectedDimension
+    return { ok, dimension, availableVectors }
+  } catch (error) {
+    logWarn('qdrant', 'Unable to verify Qdrant collection vector parameters', {
+      collection,
+      vectorName,
+      expectedDimension,
+      ...describeError(error),
+    })
+    return { ok: false, availableVectors: [] }
+  }
+}
+
+function buildGrpcQueryPointsRequest(params: {
+  collection: string
+  queryText: string
+  vectorName: string
+  limit: number
+}): QdrantGrpcQueryRequest {
+  const limit = BigInt(Math.max(1, params.limit))
+  return {
+    collectionName: params.collection,
+    using: params.vectorName,
+    limit,
+    withPayload: { selectorOptions: { case: 'enable', value: true } },
+    withVectors: { selectorOptions: { case: 'enable', value: false } },
+    query: {
+      variant: {
+        case: 'nearest',
+        value: {
+          vector: {
+            variant: {
+              case: 'document',
+              value: {
+                text: params.queryText,
+                model: params.vectorName,
+                options: {},
+              },
+            },
+          },
+        },
+      },
+    },
+  }
+}
+
+function mapGrpcScoredPointToRawResult(point: QdrantGrpcScoredPoint): RawQdrantResult {
+  const payload = convertGrpcPayloadMap(point.payload ?? {})
+  const id = convertPointIdToString(point.id)
+  const restPoint = {
+    id,
+    payload,
+  } as unknown as QdrantScrollPoint
+  const mapped = mapScrollPointToRawResult(restPoint)
+  if (!mapped.metadata) mapped.metadata = {}
+  if (typeof point.score === 'number') {
+    mapped.metadata.score = point.score
+  }
+  return mapped
+}
+
+function mapHttpScoredPointToRawResult(point: QdrantHttpScoredPoint): RawQdrantResult {
+  const restPoint = {
+    id: convertHttpPointIdToString(point.id),
+    payload: point.payload,
+  } as unknown as QdrantScrollPoint
+  const mapped = mapScrollPointToRawResult(restPoint)
+  if (!mapped.metadata) mapped.metadata = {}
+  if (typeof point.score === 'number') {
+    mapped.metadata.score = point.score
+  }
+  if (!mapped.id) {
+    mapped.id = convertHttpPointIdToString(point.id)
+  }
+  return mapped
+}
+
+function convertPointIdToString(id?: QdrantGrpcScoredPoint['id']): string | undefined {
+  const options = id?.pointIdOptions
+  if (!options) return undefined
+  if (options.case === 'uuid' && typeof options.value === 'string') {
+    return options.value
+  }
+  if (options.case === 'num' && typeof options.value === 'bigint') {
+    const numeric = Number(options.value)
+    return Number.isSafeInteger(numeric) ? String(numeric) : options.value.toString()
+  }
+  return undefined
+}
+
+function convertHttpPointIdToString(id: unknown): string | undefined {
+  if (typeof id === 'string') return id
+  if (typeof id === 'number' && Number.isFinite(id)) {
+    return id.toString()
+  }
+  if (typeof id === 'bigint') {
+    const numeric = Number(id)
+    return Number.isSafeInteger(numeric) ? numeric.toString() : id.toString()
+  }
+  return undefined
+}
+
+function convertGrpcPayloadMap(payload: Record<string, unknown>): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(payload)) {
+    const converted = convertGrpcValue(value as unknown)
+    if (typeof converted !== 'undefined') {
+      result[key] = converted
+    }
+  }
+  return result
+}
+
+function convertGrpcValue(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || !('kind' in value)) return undefined
+  const kind = (value as { kind: { case?: string; value?: unknown } }).kind
+  switch (kind?.case) {
+    case 'nullValue':
+      return null
+    case 'doubleValue':
+      return kind.value
+    case 'integerValue':
+      if (typeof kind.value === 'bigint') {
+        const numeric = Number(kind.value)
+        return Number.isSafeInteger(numeric) ? numeric : kind.value.toString()
+      }
+      return undefined
+    case 'stringValue':
+      return kind.value
+    case 'boolValue':
+      return kind.value
+    case 'structValue':
+      return convertGrpcStruct(kind.value as { fields: Record<string, unknown> })
+    case 'listValue': {
+      const list = (kind.value as { values?: unknown[] })?.values
+      return Array.isArray(list) ? list.map(convertGrpcValue) : []
+    }
+    default:
+      return undefined
+  }
+}
+
+function convertGrpcStruct(struct: { fields: Record<string, unknown> } | undefined): Record<string, unknown> {
+  if (!struct || typeof struct !== 'object' || !('fields' in struct)) return {}
+  const entries = (struct as { fields: Record<string, unknown> }).fields ?? {}
+  const result: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(entries)) {
+    const converted = convertGrpcValue(value)
+    if (typeof converted !== 'undefined') result[key] = converted
+  }
+  return result
+}
+
+type QdrantScrollPoint = Awaited<ReturnType<QdrantRestClient['scroll']>>['points'][number]
+
+function createQdrantRestClientInstance(config: {
+  baseUrl: string
+  apiKey?: string | null
+}): QdrantRestClient {
+  return new QdrantRestClient({
+    url: config.baseUrl,
+    apiKey: config.apiKey ?? undefined,
+  })
+}
+
+function mapScrollPointToRawResult(point: QdrantScrollPoint): RawQdrantResult {
+  const payload = isPlainObject(point.payload) ? (point.payload as Record<string, unknown>) : {}
+  const metadataCandidate = payload.metadata
+  let metadata: RawQdrantMetadata | undefined
+
+  if (isPlainObject(metadataCandidate)) {
+    const normalized: RawQdrantMetadata = { ...metadataCandidate }
+    if (normalized.entities) {
+      normalized.entities = normalizeEntities(normalized.entities).map((entity) => ({
+        ...entity,
+        vectorMatch: true,
+      }))
+    }
+    if (normalized.relationships) normalized.relationships = normalizeRelationships(normalized.relationships)
+    metadata = normalized
+  } else {
+    const derived: RawQdrantMetadata = {}
+    if (Array.isArray(payload.entities)) {
+      derived.entities = normalizeEntities(payload.entities).map((entity) => ({
+        ...entity,
+        vectorMatch: true,
+      }))
+    }
+    if (Array.isArray(payload.relationships)) {
+      derived.relationships = normalizeRelationships(payload.relationships)
+    }
+    if (typeof payload.entity_name === 'string') {
+      derived.entity_name = payload.entity_name
+    }
+    if (typeof payload.entity_type === 'string') {
+      derived.entity_type = payload.entity_type
+    }
+    if (typeof payload.description === 'string') {
+      derived.description = payload.description
+    }
+    if (typeof payload.uuid === 'string') {
+      derived.uuid = payload.uuid
+    }
+    if (Object.keys(derived).length > 0) metadata = derived
+  }
+
+  const informationSource = [payload.information, payload.summary, payload.text, payload.content].find(
+    (value): value is string => typeof value === 'string' && value.trim().length > 0
+  )
+
+  const result: RawQdrantResult = {}
+  if (typeof point.id === 'string') result.id = point.id
+  else if (typeof point.id === 'number') result.id = point.id.toString()
+  if (metadata) result.metadata = metadata
+  if (informationSource) result.information = informationSource
+  return result
+}
+
+function shouldApplyQueryFilter(query: string | undefined): boolean {
+  const trimmed = (query ?? '').trim()
+  if (!trimmed) return false
+  if (trimmed.toLowerCase() === 'knowledge graph entities') return false
+  return true
+}
+
+function rawResultMatchesQuery(result: RawQdrantResult, query: string): boolean {
+  const trimmed = query.trim().toLowerCase()
+  if (!trimmed) return true
+  const terms = trimmed.split(/\s+/).filter(Boolean)
+  if (terms.length === 0) return true
+
+  const haystackParts: string[] = []
+  if (typeof result.information === 'string') haystackParts.push(result.information)
+  const metadata = result.metadata
+  if (metadata) {
+    if (typeof metadata.description === 'string') haystackParts.push(metadata.description)
+    if (typeof metadata.entity_name === 'string') haystackParts.push(metadata.entity_name)
+    if (typeof metadata.entity_type === 'string') haystackParts.push(metadata.entity_type)
+    if (Array.isArray(metadata.entities)) {
+      metadata.entities.forEach((entity) => {
+        if (entity) {
+          haystackParts.push(entity.name)
+          if (entity.description) haystackParts.push(entity.description)
+        }
+      })
+    }
+    if (Array.isArray(metadata.relationships)) {
+      metadata.relationships.forEach((relationship) => {
+        if (relationship) {
+          haystackParts.push(relationship.source)
+          haystackParts.push(relationship.target)
+          haystackParts.push(relationship.relationship)
+        }
+      })
+    }
+  }
+
+  const haystack = haystackParts.join(' ').toLowerCase()
+  return terms.every((term) => haystack.includes(term))
 }
 
 function mapQdrantResults(
@@ -1089,10 +1689,17 @@ export async function searchShardedHKG(
     coordinateByUUID = true,
     shardTimeout = 5000,
   } = options
-  const base = await findWorkingMCPServer()
-  if (!base) {
-    logError('sharded-hkg', 'No MCP server available for sharded search', { searchTopic })
-    return null
+  const {
+    baseUrl: qdrantBaseUrl,
+    apiKey: qdrantApiKey,
+    collection: qdrantCollection,
+    embeddingModel: qdrantVectorName,
+  } = getQdrantConnectionConfig()
+  const mcpBase = await findWorkingMCPServer()
+  if (!mcpBase) {
+    logWarn('sharded-hkg', 'MCP services unavailable; continuing with direct Qdrant only', {
+      searchTopic,
+    })
   }
 
   logInfo('sharded-hkg', 'Executing sharded HKG search', {
@@ -1102,7 +1709,10 @@ export async function searchShardedHKG(
     includeAuditTrail,
     coordinateByUUID,
     shardTimeout,
-    base,
+    qdrantEndpoint: qdrantBaseUrl,
+    qdrantCollection,
+    qdrantVector: qdrantVectorName,
+    mcpBase,
   })
 
   const vectorUUIDs = new Set<string>()
@@ -1112,39 +1722,31 @@ export async function searchShardedHKG(
 
   if (preferVectorSearch) {
     try {
-      logDebug('sharded-hkg', 'Starting Qdrant shard search', { base, searchTopic, maxResultsPerShard })
-      const qRes = await Promise.race([
-        tryFetch(`${base}/mcp/qdrant/find`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ query: searchTopic, limit: maxResultsPerShard, similarity_threshold: 0.7 }),
-        }),
-        new Promise<Response>((_, reject) =>
-          setTimeout(() => reject(new Error('Qdrant timeout')), shardTimeout)
-        ),
-      ])
-      if (qRes.ok) {
-        const qData = (await qRes.json()) as RawQdrantResult[]
-        vectorResults = qData
-          .map<VectorSearchResult>((entry) => ({
-            ...entry,
-            uuid:
-              typeof entry.metadata?.uuid === 'string'
-                ? entry.metadata.uuid
-                : typeof entry.id === 'string'
-                  ? entry.id
-                  : undefined,
-          }))
-          .filter((result): result is VectorSearchResult => typeof result.uuid === 'string')
-        vectorResults.forEach((result) => {
-          if (result.uuid) vectorUUIDs.add(result.uuid)
-        })
-        logInfo('sharded-hkg', 'Qdrant shard search completed', {
-          base,
-          results: vectorResults.length,
-          uniqueUUIDs: vectorUUIDs.size,
-        })
-      }
+      logDebug('sharded-hkg', 'Starting direct Qdrant shard search', {
+        endpoint: qdrantBaseUrl,
+        collection: qdrantCollection,
+        vector: qdrantVectorName,
+        searchTopic,
+        maxResultsPerShard,
+      })
+      vectorResults = await performDirectQdrantSearch({
+        baseUrl: qdrantBaseUrl,
+        apiKey: qdrantApiKey,
+        collection: qdrantCollection,
+        query: searchTopic,
+        limit: maxResultsPerShard,
+        vectorName: qdrantVectorName,
+        timeoutMs: shardTimeout,
+      })
+      vectorResults.forEach((result) => {
+        if (result.uuid) vectorUUIDs.add(result.uuid)
+      })
+      logInfo('sharded-hkg', 'Qdrant shard search completed', {
+        endpoint: qdrantBaseUrl,
+        collection: qdrantCollection,
+        results: vectorResults.length,
+        uniqueUUIDs: vectorUUIDs.size,
+      })
     } catch (e) {
       logWarn('sharded-hkg', 'Qdrant vector search failed', {
         error: e instanceof Error ? e.message : String(e),
@@ -1153,15 +1755,15 @@ export async function searchShardedHKG(
     }
   }
 
-  if (includeAuditTrail) {
+  if (includeAuditTrail && mcpBase) {
     try {
       logDebug('sharded-hkg', 'Starting PostgreSQL audit shard search', {
-        base,
+        base: mcpBase,
         searchTopic,
         maxResultsPerShard,
       })
       const aRes = await Promise.race([
-        tryFetch(`${base}/mcp/postgres/query_audit_logs`, {
+        tryFetch(`${mcpBase}/mcp/postgres/query_audit_logs`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1192,7 +1794,7 @@ export async function searchShardedHKG(
           if (log.uuid) auditUUIDs.add(log.uuid)
         })
         logInfo('sharded-hkg', 'PostgreSQL audit shard search completed', {
-          base,
+          base: mcpBase,
           results: auditResults.length,
           uniqueUUIDs: auditUUIDs.size,
         })
@@ -1203,21 +1805,25 @@ export async function searchShardedHKG(
       })
       console.warn('PostgreSQL audit search failed:', (e as Error).message)
     }
+  } else if (includeAuditTrail && !mcpBase) {
+    logWarn('sharded-hkg', 'Skipping PostgreSQL audit shard search due to missing MCP base', {
+      searchTopic,
+    })
   }
 
   let coordinatedEntities: Entity[] = []
   let coordinatedRelationships: Relationship[] = []
 
-  if (coordinateByUUID) {
+  if (coordinateByUUID && mcpBase) {
     const uuids = Array.from(new Set<string>([...vectorUUIDs.values(), ...auditUUIDs.values()]))
     if (uuids.length > 0) {
       try {
         logDebug('sharded-hkg', 'Coordinating Neo4j entities for shard results', {
-          base,
+          base: mcpBase,
           uuids: uuids.length,
           searchTopic,
         })
-        const nRes = await tryFetch(`${base}/mcp/neo4j/search_nodes`, {
+        const nRes = await tryFetch(`${mcpBase}/mcp/neo4j/search_nodes`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1265,16 +1871,23 @@ export async function searchShardedHKG(
         console.warn('Neo4j coordination failed:', (e as Error).message)
       }
     }
+  } else if (coordinateByUUID && !mcpBase) {
+    logWarn('sharded-hkg', 'Skipping Neo4j coordination due to missing MCP base', {
+      searchTopic,
+    })
   }
 
   if (coordinatedEntities.length < 10) {
     try {
+      if (!mcpBase) {
+        throw new Error('MCP base unavailable for fallback Neo4j search')
+      }
       logDebug('sharded-hkg', 'Executing fallback Neo4j search', {
-        base,
+        base: mcpBase,
         searchTopic,
         maxResultsPerShard,
       })
-      const fb = await tryFetch(`${base}/mcp/neo4j/search_nodes`, {
+      const fb = await tryFetch(`${mcpBase}/mcp/neo4j/search_nodes`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: searchTopic, limit: maxResultsPerShard }),
@@ -1323,6 +1936,10 @@ export async function searchShardedHKG(
       relationship_count: coordinatedRelationships.length,
       vector_results: vectorResults.length,
       audit_results: auditResults.length,
+      qdrant_endpoint: qdrantBaseUrl,
+      qdrant_collection: qdrantCollection,
+      transport_insecure: true,
+      mcp_base: mcpBase ?? null,
     },
   }
   logInfo('sharded-hkg', 'Sharded HKG search completed', {
