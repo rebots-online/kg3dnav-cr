@@ -10,6 +10,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "3D Knowledge Graph Navigator",
         "width": 1400,
         "height": 1000,
@@ -28,4 +29,3 @@
     ]
   }
 }
-

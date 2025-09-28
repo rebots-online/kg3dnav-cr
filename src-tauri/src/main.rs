@@ -61,7 +61,11 @@ fn get_build_info() -> BuildInfo {
     let git_sha = option_env!("GIT_SHA").unwrap_or("unknown").to_string();
     let epoch_seconds_value = option_env!("BUILD_EPOCH")
         .and_then(|s| s.parse::<u64>().ok())
-        .or_else(|| option_env!("BUILD_MINUTES").and_then(|s| s.parse::<u64>().ok()).map(|m| m * 60))
+        .or_else(|| {
+            option_env!("BUILD_MINUTES")
+                .and_then(|s| s.parse::<u64>().ok())
+                .map(|m| m * 60)
+        })
         .unwrap_or_else(|| {
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
