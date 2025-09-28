@@ -50,7 +50,7 @@ export const MCP_DEFAULT = 'http://192.168.0.71:49160'
 
 export const DEFAULT_SERVICE_ENDPOINTS: Record<ServiceKey, string> = {
   neo4j: 'bolt://192.168.0.71:7687',
-  qdrant: 'http://192.168.0.71:6333',
+  qdrant: 'http://mcp.robinsai.world:6333',
   postgres: 'postgresql://192.168.0.71:5432',
   ollama: 'http://localhost:11434',
   openRouter: 'https://openrouter.ai/api/v1/chat/completions',
@@ -87,6 +87,75 @@ export function normalizeNeo4jUri(raw: string | undefined): string {
   return fallback
 }
 
+export function deriveQdrantGrpcAddress(raw: string | undefined): {
+  host: string
+  port: number
+  useTLS: boolean
+} {
+  const fallbackHost = 'mcp.robinsai.world'
+  const fallbackPort = 6334
+
+  if (typeof raw !== 'string') {
+    return { host: fallbackHost, port: fallbackPort, useTLS: false }
+  }
+
+  const trimmed = raw.trim()
+  if (!trimmed) {
+    return { host: fallbackHost, port: fallbackPort, useTLS: false }
+  }
+
+  let host = fallbackHost
+  let port = fallbackPort
+
+  const normalizePort = (candidate: number | undefined) => {
+    if (!Number.isFinite(candidate)) return fallbackPort
+    if (candidate === 6333) return 6334
+    return candidate as number
+  }
+
+  try {
+    const normalized = trimmed.startsWith('http') ? trimmed : `http://${trimmed}`
+    const url = new URL(normalized)
+    host = url.hostname || fallbackHost
+    const parsedPort = url.port ? Number.parseInt(url.port, 10) : undefined
+    port = normalizePort(parsedPort)
+  } catch (_) {
+    const withoutProtocol = trimmed.replace(/^https?:\/\//, '')
+    const [hostPart, portPart] = withoutProtocol.split(':')
+    if (hostPart) {
+      host = hostPart.split('/')[0] || fallbackHost
+    }
+    if (portPart) {
+      const parsed = Number.parseInt(portPart, 10)
+      if (Number.isFinite(parsed)) {
+        port = normalizePort(parsed)
+      }
+    }
+  }
+
+  return { host, port, useTLS: false }
+}
+
+export type QdrantConnectionConfig = {
+  baseUrl: string
+  collection: string
+  apiKey?: string
+  embeddingModel: string
+  dimension: number
+}
+
+export const getQdrantConnectionConfig = (): QdrantConnectionConfig => {
+  const cfg = getServiceConfigSnapshot('qdrant')
+  const baseUrl = sanitizeBaseUrl(cfg.baseUrl) ?? DEFAULT_SERVICE_ENDPOINTS.qdrant
+  const collectionRaw = typeof cfg.collection === 'string' ? cfg.collection.trim() : ''
+  const collection = collectionRaw || 'hkg-2sep2025'
+  const embeddingRaw = typeof cfg.embeddingModel === 'string' ? cfg.embeddingModel.trim() : ''
+  const embeddingModel = embeddingRaw || 'mxbai-embed-large'
+  const dimension = typeof cfg.dimension === 'number' && Number.isFinite(cfg.dimension) ? cfg.dimension : 1024
+  const apiKey = getQdrantApiKeySnapshot() ?? sanitizeAuthValue(cfg.apiKey) ?? undefined
+  return { baseUrl, collection, apiKey, embeddingModel, dimension }
+}
+
 const DEFAULT_SERVICE_CONFIGS: Record<ServiceKey, EndpointConfig> = {
   neo4j: {
     baseUrl: normalizeNeo4jUri(DEFAULT_SERVICE_ENDPOINTS.neo4j),
@@ -96,7 +165,7 @@ const DEFAULT_SERVICE_CONFIGS: Record<ServiceKey, EndpointConfig> = {
   },
   qdrant: {
     baseUrl: DEFAULT_SERVICE_ENDPOINTS.qdrant,
-    apiKey: '',
+    apiKey: 'qsk_171/hJyYAGLXgxeBDOjLF9Eyrh908qW63xgfcpqDz+ZWUs=',
     collection: 'hkg-2sep2025',
     embeddingModel: 'mxbai-embed-large',
     dimension: 1024,
@@ -333,5 +402,14 @@ export const useLLMProvider = (): LLMProvider => useSettingsStore((s) => s.llmPr
 
 export const getServiceConfigSnapshot = (key: ServiceKey): EndpointConfig =>
   useSettingsStore.getState().getServiceConfig(key)
+
+export const getQdrantApiKeySnapshot = (): string | undefined => {
+  const cfg = getServiceConfigSnapshot('qdrant')
+  if (typeof cfg.apiKey === 'string') {
+    const trimmed = cfg.apiKey.trim()
+    if (trimmed) return trimmed
+  }
+  return undefined
+}
 
 export default useSettingsStore

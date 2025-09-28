@@ -12,6 +12,8 @@
     "format": "prettier --write ."
   },
   "dependencies": {
+    "@qdrant/js-client-grpc": "^1.15.1",
+    "@qdrant/js-client-rest": "^1.9.0",
     "@react-three/drei": "^9.122.0",
     "@react-three/fiber": "^8.18.0",
     "@tauri-apps/api": "^2.0.0",
