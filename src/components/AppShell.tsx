@@ -9,6 +9,7 @@ import ConnectionDebugSidebar from './ConnectionDebugSidebar'
 import { getBuildInfo, fetchBuildInfo, formatVersionBuildForDisplay } from '../config/buildInfo'
 import AboutModal from './AboutModal'
 import SplashScreen from './SplashScreen'
+import InitialLoadOverlay from './InitialLoadOverlay'
 import { useLogPanelState } from '../state/logStore'
 
 export default function AppShell(): JSX.Element {
@@ -158,6 +159,8 @@ export default function AppShell(): JSX.Element {
       >
         <div>{`${formatVersionBuildForDisplay(buildInfo.versionBuild)} • v${buildInfo.semver}`}</div>
       </div>
+
+      <InitialLoadOverlay />
 
       {showSplash && <SplashScreen buildInfo={buildInfo} />}
       {aboutOpen && <AboutModal buildInfo={buildInfo} onClose={() => setAboutOpen(false)} />}
